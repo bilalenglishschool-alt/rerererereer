@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Запись урока</title>
+  <style>
+    :root {
+      --bg: #f3f7fb;
+      --card: #ffffff;
+      --text: #122136;
+      --muted: #5b6a80;
+      --ok: #0c8f4f;
+      --warn: #c87700;
+      --error: #b42318;
+      --accent: #1366d6;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "Noto Sans", sans-serif;
+      background: radial-gradient(circle at top right, #dcecff 0%, var(--bg) 45%, #ecf4ff 100%);
+      color: var(--text);
+      display: grid;
+      place-items: center;
+      padding: 20px;
+    }
+
+    .card {
+      width: min(620px, 100%);
+      background: var(--card);
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 20px 35px rgba(8, 24, 54, 0.12);
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 1.6rem;
+    }
+
+    .meta {
+      color: var(--muted);
+      margin-bottom: 16px;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
+    .status {
+      padding: 10px 12px;
+      border-radius: 10px;
+      margin-bottom: 16px;
+      background: #e9eff8;
+      color: #1f324f;
+    }
+
+    .status.ok { background: #dff4e7; color: var(--ok); }
+    .status.warn { background: #fff1de; color: var(--warn); }
+    .status.error { background: #ffe3e0; color: var(--error); }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    button, a.btn {
+      border: 0;
+      border-radius: 10px;
+      padding: 12px 16px;
+      font-size: 0.98rem;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform .08s ease, opacity .2s ease;
+    }
+
+    button:active, a.btn:active {
+      transform: translateY(1px);
+    }
+
+    button[disabled] {
+      opacity: .55;
+      cursor: not-allowed;
+    }
+
+    .primary { background: var(--accent); color: #fff; }
+    .danger { background: #b42318; color: #fff; }
+    .secondary { background: #dde8fb; color: #11335f; }
+
+    .info {
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin-top: 8px;
+      line-height: 1.45;
+    }
+
+    .pending {
+      font-weight: 600;
+      color: #11335f;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Запись урока</h1>
+    <div class="meta">
+      Ученик: <b>{{ student_name }}</b><br>
+      Lesson ID: <code>{{ lesson_id }}</code>
+    </div>
+
+    <div id="status" class="status">Ожидание запуска записи.</div>
+
+    <div class="controls">
+      <button id="startBtn" class="primary">Начать запись</button>
+      <button id="finishBtn" class="danger" disabled>Закончить урок</button>
+      <button id="retryBtn" class="secondary" hidden>Повторить</button>
+      <a id="downloadBtn" class="btn secondary" hidden>Скачать запись</a>
+    </div>
+
+    <div class="info">
+      Непереданных чанков: <span class="pending" id="pendingCount">0</span><br>
+      При потере связи запись продолжается локально, очередь догружается при восстановлении.
+    </div>
+  </main>
+
+  <script>
+    const lessonId = {{ lesson_id | tojson }};
+    const token = {{ token | tojson }};
+
+    const startBtn = document.getElementById("startBtn");
+    const finishBtn = document.getElementById("finishBtn");
+    const retryBtn = document.getElementById("retryBtn");
+    const downloadBtn = document.getElementById("downloadBtn");
+    const statusEl = document.getElementById("status");
+    const pendingCountEl = document.getElementById("pendingCount");
+
+    let stream = null;
+    let recorder = null;
+    let isRecording = false;
+    let isUploading = false;
+    let pendingFinish = false;
+    let lessonFinalized = false;
+    let recorderStopped = false;
+    let finishInFlight = false;
+    let autoFinalizeRunning = false;
+    let finalizeWithRetriesInFlight = false;
+    let nextSeq = 0;
+
+    const uploadQueue = [];
+    const allChunks = [];
+    let downloadUrl = null;
+    const AUTO_FINALIZE_MAX_ATTEMPTS = 30;
+    const AUTO_FINALIZE_DELAY_MS = 2000;
+
+    function setStatus(message, level = "") {
+      statusEl.textContent = message;
+      statusEl.className = `status ${level}`.trim();
+    }
+
+    function updatePending() {
+      pendingCountEl.textContent = String(uploadQueue.length);
+    }
+
+    function showRecoveryOptions() {
+      if (allChunks.length > 0) {
+        if (downloadUrl) {
+          URL.revokeObjectURL(downloadUrl);
+        }
+        downloadUrl = URL.createObjectURL(new Blob(allChunks, { type: "audio/webm" }));
+        downloadBtn.href = downloadUrl;
+        downloadBtn.download = `lesson-${lessonId}.webm`;
+        downloadBtn.hidden = false;
+      }
+      retryBtn.hidden = false;
+    }
+
+    function hideRecoveryOptions() {
+      retryBtn.hidden = true;
+      downloadBtn.hidden = true;
+    }
+
+    async function parseError(response) {
+      try {
+        const payload = await response.json();
+        if (payload && typeof payload.detail === "string" && payload.detail.trim()) {
+          return payload.detail;
+        }
+      } catch (_err) {
+        // no-op
+      }
+      return `HTTP ${response.status}`;
+    }
+
+    function delay(ms) {
+      return new Promise((resolve) => {
+        window.setTimeout(resolve, ms);
+      });
+    }
+
+    async function requestStart() {
+      const response = await fetch(`/api/lessons/${lessonId}/start?token=${encodeURIComponent(token)}`, {
+        method: "POST"
+      });
+      if (!response.ok) {
+        throw new Error(`start failed: ${response.status}`);
+      }
+    }
+
+    async function uploadOne(item) {
+      const form = new FormData();
+      form.append("seq", String(item.seq));
+      form.append("chunk", item.blob, `chunk-${item.seq}.webm`);
+
+      const response = await fetch(`/api/lessons/${lessonId}/chunks?token=${encodeURIComponent(token)}`, {
+        method: "POST",
+        body: form,
+      });
+      if (!response.ok) {
+        throw new Error(`chunk upload failed: ${response.status}`);
+      }
+    }
+
+    async function finalizeLesson() {
+      if (lessonFinalized || finishInFlight) {
+        return { ok: lessonFinalized, error: null };
+      }
+
+      finishInFlight = true;
+      try {
+        const response = await fetch(`/api/lessons/${lessonId}/finish?token=${encodeURIComponent(token)}`, {
+          method: "POST",
+        });
+
+        if (!response.ok) {
+          const errText = await parseError(response);
+          throw new Error(errText);
+        }
+
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch (_err) {
+          payload = null;
+        }
+
+        lessonFinalized = true;
+        pendingFinish = false;
+        finishBtn.disabled = true;
+        hideRecoveryOptions();
+
+        if (payload && payload.queued === true) {
+          setStatus("Урок завершён, обработка запущена.", "ok");
+        } else {
+          setStatus("Урок завершён, обработка запущена.", "ok");
+        }
+        return { ok: true, error: null };
+      } catch (err) {
+        const errText = err instanceof Error ? err.message : "неизвестная ошибка";
+        return { ok: false, error: errText };
+      } finally {
+        finishInFlight = false;
+      }
+    }
+
+    async function tryFinish() {
+      const result = await finalizeLesson();
+      if (!result.ok) {
+        const errText = result.error || "неизвестная ошибка";
+        setStatus(`Не удалось завершить урок: ${errText}`, "error");
+        showRecoveryOptions();
+      }
+      return result;
+    }
+
+    async function runAutoFinalizeCycle() {
+      if (autoFinalizeRunning || lessonFinalized || !pendingFinish || !recorderStopped) {
+        return;
+      }
+
+      autoFinalizeRunning = true;
+      hideRecoveryOptions();
+
+      let lastError = "превышен лимит попыток";
+      try {
+        for (let attempt = 1; attempt <= AUTO_FINALIZE_MAX_ATTEMPTS; attempt += 1) {
+          if (lessonFinalized || !pendingFinish) {
+            return;
+          }
+
+          setStatus("Догружаем запись и завершаем урок...", "warn");
+
+          await flushQueue({ suppressStatus: true });
+
+          if (uploadQueue.length === 0) {
+            const finishResult = await finalizeLesson();
+            if (finishResult.ok) {
+              return;
+            }
+            if (finishResult.error) {
+              lastError = finishResult.error;
+            }
+          } else {
+            lastError = "остались непереданные чанки";
+          }
+
+          if (attempt < AUTO_FINALIZE_MAX_ATTEMPTS) {
+            await delay(AUTO_FINALIZE_DELAY_MS);
+          }
+        }
+      } finally {
+        autoFinalizeRunning = false;
+      }
+
+      if (!lessonFinalized) {
+        setStatus(`Не удалось завершить урок: ${lastError}`, "error");
+        showRecoveryOptions();
+      }
+    }
+
+    async function flushQueue(options = {}) {
+      const suppressStatus = options.suppressStatus === true;
+      if (isUploading) {
+        return;
+      }
+
+      isUploading = true;
+      try {
+        while (uploadQueue.length > 0) {
+          if (!navigator.onLine) {
+            throw new Error("offline");
+          }
+
+          const item = uploadQueue[0];
+          await uploadOne(item);
+          uploadQueue.shift();
+          updatePending();
+        }
+
+        if (!suppressStatus && isRecording) {
+          setStatus("Запись идет, чанки синхронизированы.", "ok");
+        }
+      } catch (err) {
+        if (!suppressStatus) {
+          setStatus("Связь нестабильна: продолжаем запись локально.", "warn");
+        }
+      } finally {
+        isUploading = false;
+        updatePending();
+      }
+    }
+
+    async function startRecording() {
+      try {
+        await requestStart();
+      } catch (err) {
+        setStatus("Не удалось начать урок на сервере.", "error");
+        return;
+      }
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (err) {
+        setStatus("Доступ к микрофону отклонен.", "error");
+        return;
+      }
+
+      const options = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? { mimeType: "audio/webm;codecs=opus" }
+        : undefined;
+
+      recorder = new MediaRecorder(stream, options);
+      recorderStopped = false;
+
+      recorder.ondataavailable = (event) => {
+        if (!event.data || event.data.size === 0) {
+          return;
+        }
+
+        allChunks.push(event.data);
+        uploadQueue.push({ seq: nextSeq, blob: event.data });
+        nextSeq += 1;
+        updatePending();
+        void flushQueue();
+      };
+
+      recorder.onstop = async () => {
+        recorderStopped = true;
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+          stream = null;
+        }
+        await flushQueue({ suppressStatus: true });
+      };
+
+      recorder.start(5000);
+      isRecording = true;
+      pendingFinish = false;
+      startBtn.disabled = true;
+      finishBtn.disabled = false;
+      hideRecoveryOptions();
+      setStatus("Идет запись урока.", "ok");
+    }
+
+    async function stopRecordingForFinalize() {
+      if (!isRecording) {
+        recorderStopped = true;
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+          stream = null;
+        }
+        await flushQueue({ suppressStatus: true });
+        return;
+      }
+
+      isRecording = false;
+      finishBtn.disabled = true;
+      setStatus("Остановка урока и догрузка чанков...", "warn");
+
+      if (recorder && recorder.state !== "inactive") {
+        await new Promise((resolve) => {
+          recorder.addEventListener("stop", resolve, { once: true });
+          recorder.stop();
+        });
+      } else {
+        recorderStopped = true;
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop());
+          stream = null;
+        }
+      }
+
+      await flushQueue({ suppressStatus: true });
+    }
+
+    async function finalizeWithRetries() {
+      if (lessonFinalized || finalizeWithRetriesInFlight || autoFinalizeRunning) {
+        return;
+      }
+
+      finalizeWithRetriesInFlight = true;
+      try {
+        pendingFinish = true;
+        await stopRecordingForFinalize();
+        setStatus("Догружаем запись и завершаем урок...", "warn");
+        await runAutoFinalizeCycle();
+      } finally {
+        finalizeWithRetriesInFlight = false;
+      }
+    }
+
+    window.addEventListener("online", () => {
+      if (pendingFinish && recorderStopped && !lessonFinalized) {
+        void runAutoFinalizeCycle();
+        return;
+      }
+
+      if (uploadQueue.length > 0) {
+        setStatus("Связь восстановлена. Догружаем очередь...", "warn");
+      }
+      void flushQueue();
+    });
+
+    window.addEventListener("offline", () => {
+      setStatus("Офлайн: запись продолжается локально.", "warn");
+    });
+
+    startBtn.addEventListener("click", () => {
+      void startRecording();
+    });
+
+    finishBtn.addEventListener("click", () => {
+      void finalizeWithRetries();
+    });
+
+    retryBtn.addEventListener("click", () => {
+      void finalizeWithRetries();
+    });
+
+    window.addEventListener("beforeunload", () => {
+      if (downloadUrl) {
+        URL.revokeObjectURL(downloadUrl);
+      }
+    });
+  </script>
+</body>
+</html>

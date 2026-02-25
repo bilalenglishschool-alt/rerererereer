@@ -4,16 +4,18 @@ import asyncio
 import logging
 import time
 from pathlib import Path
+from uuid import UUID
 
 from sqlalchemy import update
 
 from .config import get_settings
 from .database import SessionLocal, init_db
 from .drafts import TRANSCRIPTION_FAILED_TEXT, generate_draft, transcribe_audio
-from .models import Artifact, Lesson, LessonChunk
+from .models import Artifact, Lesson, LessonChunk, TranscriptionJob
 from .queue import (
     TASK_GENERATE_ARTIFACTS,
     TASK_PROCESS_AUDIO,
+    TASK_TRANSCRIBE_JOB,
     WORKER_FAILURE_EVENTS_ZSET_KEY,
     WORKER_METRIC_TASKS_FAILED_KEY,
     WORKER_METRIC_TASKS_PROCESSED_KEY,
@@ -27,7 +29,7 @@ from .queue import (
     reserve_task,
     restore_inflight_tasks,
 )
-from .storage import merge_chunks, write_transcript_file
+from .storage import merge_chunks, write_transcript_file, write_transcription_text
 from .telegram_api import send_draft_to_tutor
 from .time_utils import utcnow
 
@@ -63,12 +65,26 @@ def record_task_failure(redis_client, task_type: str, lesson_id: str, reason: st
 def handle_task_failure(redis_client, raw_task: str, lesson_id: str, task_type: str, exc: Exception) -> str:
     attempts = 0
     with SessionLocal() as db:
-        lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
-        if lesson:
-            attempts = lesson.processing_attempts or 0
-            lesson.processing_status = "failed"
-            lesson.processing_error = str(exc)
-            db.commit()
+        if task_type == TASK_TRANSCRIBE_JOB:
+            try:
+                job_uuid = UUID(str(lesson_id))
+            except ValueError:
+                job_uuid = None
+            if job_uuid:
+                job = db.query(TranscriptionJob).filter(TranscriptionJob.id == job_uuid).first()
+                if job:
+                    attempts = job.processing_attempts or 0
+                    job.status = "failed"
+                    job.processing_error = str(exc)
+                    job.processed_at = utcnow()
+                    db.commit()
+        else:
+            lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
+            if lesson:
+                attempts = lesson.processing_attempts or 0
+                lesson.processing_status = "failed"
+                lesson.processing_error = str(exc)
+                db.commit()
 
     reason = str(exc)
     record_task_failure(redis_client, task_type=task_type, lesson_id=lesson_id, reason=reason)
@@ -313,6 +329,63 @@ def process_generate_artifacts(lesson_id: str) -> None:
         db.commit()
 
 
+def process_transcription_job(job_id: str) -> None:
+    try:
+        job_uuid = UUID(str(job_id))
+    except ValueError as exc:
+        raise ValueError(f"Invalid transcription job id: {job_id}") from exc
+
+    with SessionLocal() as db:
+        job = (
+            db.query(TranscriptionJob)
+            .filter(TranscriptionJob.id == job_uuid)
+            .with_for_update()
+            .first()
+        )
+        if not job:
+            logger.warning("Transcription job %s was not found", job_id)
+            return
+
+        if job.status == "done":
+            logger.info("Transcription job %s already done, skipping", job_id)
+            return
+
+        job.status = "processing"
+        job.processing_attempts = (job.processing_attempts or 0) + 1
+        job.processing_error = None
+        job.processed_at = None
+        db.commit()
+
+    with SessionLocal() as db:
+        job = db.query(TranscriptionJob).filter(TranscriptionJob.id == job_uuid).first()
+        if not job:
+            logger.warning("Transcription job %s disappeared during processing", job_id)
+            return
+
+        source_path = Path(job.source_path)
+        if not source_path.exists() or not source_path.is_file():
+            raise FileNotFoundError(f"Audio file not found: {source_path}")
+
+        transcript = transcribe_audio(
+            audio_path=source_path,
+            model_name=settings.whisper_model,
+            cache_dir=settings.storage_path / "whisper-cache",
+            logger=logger,
+        )
+        transcript_path = write_transcription_text(
+            settings=settings,
+            job_id=str(job.id),
+            transcript=transcript,
+        )
+
+        job.transcript_text = transcript
+        job.transcript_path = str(transcript_path)
+        job.status = "done"
+        job.processing_error = None
+        job.processed_at = utcnow()
+        db.commit()
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     init_db()
@@ -331,7 +404,7 @@ def main() -> None:
         if not lesson_id:
             ack_task(redis_client, raw_task)
             continue
-        if task_type not in {TASK_GENERATE_ARTIFACTS, TASK_PROCESS_AUDIO}:
+        if task_type not in {TASK_GENERATE_ARTIFACTS, TASK_PROCESS_AUDIO, TASK_TRANSCRIBE_JOB}:
             reason = f"Unknown task_type={task_type}"
             logger.error("%s for lesson %s, dead-lettering task", reason, lesson_id)
             record_task_failure(redis_client, task_type=task_type, lesson_id=lesson_id, reason=reason)
@@ -354,6 +427,8 @@ def main() -> None:
         try:
             if task_type == TASK_GENERATE_ARTIFACTS:
                 process_generate_artifacts(lesson_id)
+            elif task_type == TASK_TRANSCRIBE_JOB:
+                process_transcription_job(lesson_id)
             else:
                 process_audio_lesson(lesson_id)
             ack_task(redis_client, raw_task)

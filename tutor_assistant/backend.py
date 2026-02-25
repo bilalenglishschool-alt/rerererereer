@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
+from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse
@@ -13,18 +14,19 @@ from sqlalchemy.orm import Session
 
 from .config import get_settings
 from .database import get_db, init_db
-from .models import Artifact, Lesson, LessonChunk
+from .models import Artifact, Lesson, LessonChunk, TranscriptionJob
 from .queue import (
     LESSON_DEAD_LETTER_QUEUE_NAME,
     LESSON_PROCESSING_QUEUE_NAME,
     LESSON_QUEUE_NAME,
+    TASK_TRANSCRIBE_JOB,
     WORKER_FAILURE_EVENTS_ZSET_KEY,
     WORKER_METRIC_TASKS_FAILED_KEY,
     WORKER_METRIC_TASKS_PROCESSED_KEY,
     enqueue_process_lesson,
     get_redis_client,
 )
-from .storage import write_chunk
+from .storage import write_chunk, write_transcription_source
 from .time_utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -117,6 +119,33 @@ def enqueue_lesson_job(lesson_id: str) -> None:
         redis_client.close()
 
 
+def enqueue_transcription_job(job_id: str) -> None:
+    redis_client = get_redis_client(settings)
+    try:
+        enqueue_process_lesson(redis_client, lesson_id=job_id, task_type=TASK_TRANSCRIBE_JOB)
+    finally:
+        redis_client.close()
+
+
+def parse_job_id(job_id: str) -> UUID:
+    try:
+        return UUID(job_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="job_id must be UUID") from exc
+
+
+def serialize_transcription_job(job: TranscriptionJob) -> dict:
+    return {
+        "job_id": str(job.id),
+        "status": job.status,
+        "processing_attempts": int(job.processing_attempts or 0),
+        "processing_error": job.processing_error,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "processed_at": job.processed_at.isoformat() if job.processed_at else None,
+        "transcript_text": job.transcript_text,
+    }
+
+
 @app.get("/health")
 def health(db: Session = Depends(get_db)) -> dict:
     postgres_ok = False
@@ -174,6 +203,106 @@ def worker_metrics() -> dict:
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return "<h3>Tutor Assistant backend is running</h3>"
+
+
+@app.get("/transcribe", response_class=HTMLResponse)
+def transcribe_page(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse("transcribe.html", {"request": request})
+
+
+@app.post("/api/transcribe/jobs", status_code=202)
+async def create_transcription_job(
+    audio: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    payload = await audio.read()
+    if not payload:
+        raise HTTPException(status_code=400, detail="Empty audio file")
+
+    job_uuid = uuid4()
+    suffix = Path(audio.filename or "").suffix.lower() if audio.filename else ".webm"
+    source_path = write_transcription_source(
+        settings=settings,
+        job_id=str(job_uuid),
+        payload=payload,
+        suffix=suffix or ".webm",
+    )
+
+    job = TranscriptionJob(
+        id=job_uuid,
+        source_path=str(source_path),
+        status="queued",
+        processing_attempts=0,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    try:
+        enqueue_transcription_job(str(job.id))
+    except RedisError as exc:
+        job.status = "failed"
+        job.processing_error = f"Failed to enqueue task: {exc}"
+        db.commit()
+        raise HTTPException(status_code=503, detail="Queue unavailable, try again") from exc
+    except Exception as exc:  # noqa: BLE001
+        job.status = "failed"
+        job.processing_error = f"Failed to enqueue task: {exc}"
+        db.commit()
+        raise HTTPException(status_code=503, detail="Queue unavailable, try again") from exc
+
+    return serialize_transcription_job(job)
+
+
+@app.get("/api/transcribe/jobs/{job_id}")
+def get_transcription_job(job_id: str, db: Session = Depends(get_db)) -> dict:
+    job_uuid = parse_job_id(job_id)
+    job = db.query(TranscriptionJob).filter(TranscriptionJob.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Transcription job not found")
+    return serialize_transcription_job(job)
+
+
+@app.post("/api/transcribe/jobs/{job_id}/retry")
+def retry_transcription_job(job_id: str, db: Session = Depends(get_db)) -> dict:
+    job_uuid = parse_job_id(job_id)
+    job = db.query(TranscriptionJob).filter(TranscriptionJob.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Transcription job not found")
+
+    if job.status == "done":
+        payload = serialize_transcription_job(job)
+        payload["queued"] = False
+        return payload
+
+    if job.status not in {"failed", "queued"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot retry in status={job.status}",
+        )
+
+    if job.status == "failed":
+        job.status = "queued"
+        job.processing_error = None
+        job.processed_at = None
+        db.commit()
+
+    try:
+        enqueue_transcription_job(str(job.id))
+    except RedisError as exc:
+        job.status = "failed"
+        job.processing_error = f"Failed to enqueue task: {exc}"
+        db.commit()
+        raise HTTPException(status_code=503, detail="Queue unavailable, try again") from exc
+    except Exception as exc:  # noqa: BLE001
+        job.status = "failed"
+        job.processing_error = f"Failed to enqueue task: {exc}"
+        db.commit()
+        raise HTTPException(status_code=503, detail="Queue unavailable, try again") from exc
+
+    payload = serialize_transcription_job(job)
+    payload["queued"] = True
+    return payload
 
 
 @app.get("/lesson/{lesson_id}", response_class=HTMLResponse)

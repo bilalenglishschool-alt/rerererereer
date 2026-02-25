@@ -41,3 +41,32 @@ def write_transcript_file(settings: Settings, lesson_id: str, transcript: str) -
     transcript_path = lesson_base_dir(settings, lesson_id) / "transcript.txt"
     transcript_path.write_text(transcript, encoding="utf-8")
     return transcript_path
+
+
+def transcription_job_dir(settings: Settings, job_id: str) -> Path:
+    job_dir = settings.storage_path / "transcriptions" / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    return job_dir
+
+
+def write_transcription_source(
+    settings: Settings,
+    job_id: str,
+    payload: bytes,
+    suffix: str = ".webm",
+) -> Path:
+    ext = (suffix or ".webm").strip().lower()
+    if not ext.startswith("."):
+        ext = f".{ext}"
+    if len(ext) > 10 or not ext[1:].isalnum():
+        ext = ".webm"
+
+    source_path = transcription_job_dir(settings, job_id) / f"source{ext}"
+    source_path.write_bytes(payload)
+    return source_path
+
+
+def write_transcription_text(settings: Settings, job_id: str, transcript: str) -> Path:
+    transcript_path = transcription_job_dir(settings, job_id) / "transcript.txt"
+    transcript_path.write_text(transcript, encoding="utf-8")
+    return transcript_path

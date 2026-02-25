@@ -6,7 +6,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from tutor_assistant.database import SessionLocal
-from tutor_assistant.models import Lesson, Student, Tutor, TutorStudent
+from tutor_assistant.models import Lesson, Student, TranscriptionJob, Tutor, TutorStudent
 from tutor_assistant.time_utils import utcnow
 from tutor_assistant.worker import MAX_ATTEMPTS, handle_task_failure
 
@@ -39,6 +39,7 @@ class WorkerRetryPolicyTest(unittest.TestCase):
 
     def _cleanup_db(self) -> None:
         with SessionLocal() as db:
+            db.query(TranscriptionJob).delete(synchronize_session=False)
             for tutor_tg_id in self._tutor_tg_ids:
                 tutor = db.query(Tutor).filter(Tutor.tg_user_id == tutor_tg_id).first()
                 if not tutor:
@@ -95,6 +96,19 @@ class WorkerRetryPolicyTest(unittest.TestCase):
             db.commit()
             return lesson_id
 
+    def _create_transcription_job_with_attempts(self, attempts: int) -> str:
+        job_uuid = uuid4()
+        with SessionLocal() as db:
+            job = TranscriptionJob(
+                id=job_uuid,
+                source_path=f"/tmp/{job_uuid}.webm",
+                status="processing",
+                processing_attempts=attempts,
+            )
+            db.add(job)
+            db.commit()
+        return str(job_uuid)
+
     def test_handle_failure_requeues_when_attempts_below_max(self) -> None:
         lesson_id = self._create_lesson_with_attempts(
             attempts=MAX_ATTEMPTS - 1,
@@ -149,6 +163,27 @@ class WorkerRetryPolicyTest(unittest.TestCase):
         self.assertEqual(call_kwargs.get("lesson_id"), lesson_id)
         self.assertEqual(call_kwargs.get("task_type"), "generate_artifacts")
         self.assertIn("max attempts reached", str(call_kwargs.get("reason")))
+
+    def test_transcription_job_dead_letters_when_attempts_reached(self) -> None:
+        from tutor_assistant.queue import TASK_TRANSCRIBE_JOB
+
+        job_id = self._create_transcription_job_with_attempts(attempts=MAX_ATTEMPTS)
+        redis_client = _DummyRedis()
+
+        with patch("tutor_assistant.worker.requeue_task") as mocked_requeue:
+            with patch("tutor_assistant.worker.dead_letter_task") as mocked_dead_letter:
+                with patch("tutor_assistant.worker.time.sleep", return_value=None):
+                    result = handle_task_failure(
+                        redis_client=redis_client,
+                        raw_task="raw-task",
+                        lesson_id=job_id,
+                        task_type=TASK_TRANSCRIBE_JOB,
+                        exc=RuntimeError("transcription failed"),
+                    )
+
+        self.assertEqual(result, "dead_letter")
+        mocked_requeue.assert_not_called()
+        mocked_dead_letter.assert_called_once()
 
 
 if __name__ == "__main__":

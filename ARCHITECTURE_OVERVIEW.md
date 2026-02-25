@@ -3,7 +3,7 @@
 Дата: 2026-02-25
 
 ## 1) Сервисы
-- `backend`: FastAPI webhook + web/audio lesson API
+- `backend`: FastAPI webhook + web/audio lesson API + whisper transcription API
 - `bot`: aiogram handlers (invite, students, lesson commands)
 - `worker`: Redis consumer, async lesson processing
 - `postgres`: primary DB
@@ -16,6 +16,7 @@
 Текущая линия миграций:
 - `20260224_0001_initial_schema`
 - `20260225_0002_lesson_text_flow`
+- `20260225_0003_transcription_jobs`
 
 ## 3) Доменная модель
 - `Tutor (tutors)` UUID PK
@@ -30,6 +31,9 @@
   - text: `content`
 - `Artifact (artifacts)`
   - file-based (`path`) или text-based (`content`)
+- `TranscriptionJob (transcription_jobs)`
+  - статусы: `queued -> processing -> done` или `failed`
+  - хранит `source_path`, `transcript_path`, `transcript_text`, `processing_attempts`
 
 ## 4) Основные потоки
 
@@ -51,6 +55,14 @@
 4. Worker: LLM draft generation (`summary/difficulties/homework`) или fallback, `status=draft_ready`.
 5. `/lesson_send` -> отправка student, `status=sent`, `sent_at`.
 
+### Whisper transcription flow
+1. Клиент загружает аудио на `POST /api/transcribe/jobs`.
+2. Backend сохраняет source file и создаёт `transcription_jobs` (`status=queued`).
+3. В очередь уходит `task_type=transcribe_job`.
+4. Worker обрабатывает задачу, вызывает Whisper и сохраняет transcript.
+5. Клиент читает статус/результат через `GET /api/transcribe/jobs/{job_id}`.
+6. Для `failed` доступен `POST /api/transcribe/jobs/{job_id}/retry`.
+
 ## 5) Queue протокол
 Redis list `lesson_tasks`.
 In-flight list: `lesson_tasks:processing`.
@@ -64,6 +76,7 @@ Payload JSON:
 Поддерживаемые `task_type`:
 - `process_audio_lesson`
 - `generate_artifacts`
+- `transcribe_job`
 
 Backward compatibility:
 - старый raw payload (`lesson_id` строкой) трактуется как `process_audio_lesson`.

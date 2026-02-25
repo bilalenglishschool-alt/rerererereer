@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+import json
+import shutil
+import unittest
+from pathlib import Path
+from uuid import UUID
+
+from fastapi.testclient import TestClient
+
+from tutor_assistant.backend import app
+from tutor_assistant.database import SessionLocal
+from tutor_assistant.models import TranscriptionJob
+from tutor_assistant.queue import LESSON_QUEUE_NAME, TASK_TRANSCRIBE_JOB
+from tutor_assistant.worker import process_transcription_job
+
+
+class _DummyRedis:
+    def __init__(self) -> None:
+        self.pushed: list[tuple[str, str]] = []
+        self.closed = False
+
+    def lpush(self, key: str, payload: str) -> int:
+        self.pushed.append((key, payload))
+        return len(self.pushed)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class TranscriptionFlowTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._job_ids: list[str] = []
+
+    def tearDown(self) -> None:
+        self._cleanup_jobs()
+
+    def _cleanup_jobs(self) -> None:
+        dirs_to_remove: set[Path] = set()
+        with SessionLocal() as db:
+            for job_id in self._job_ids:
+                try:
+                    job_uuid = UUID(job_id)
+                except ValueError:
+                    continue
+                job = db.query(TranscriptionJob).filter(TranscriptionJob.id == job_uuid).first()
+                if not job:
+                    continue
+                if job.source_path:
+                    dirs_to_remove.add(Path(job.source_path).resolve().parent)
+                if job.transcript_path:
+                    dirs_to_remove.add(Path(job.transcript_path).resolve().parent)
+                db.delete(job)
+            db.commit()
+
+        for job_dir in dirs_to_remove:
+            shutil.rmtree(job_dir, ignore_errors=True)
+
+    def test_create_job_enqueues_task_and_worker_marks_done(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"fake-audio-bytes", "audio/webm")},
+                )
+                self.assertEqual(response.status_code, 202)
+                payload = response.json()
+                job_id = payload["job_id"]
+                self._job_ids.append(job_id)
+
+                self.assertEqual(payload["status"], "queued")
+                self.assertTrue(redis_stub.closed)
+                self.assertEqual(len(redis_stub.pushed), 1)
+
+                queue_name, raw_task = redis_stub.pushed[0]
+                self.assertEqual(queue_name, LESSON_QUEUE_NAME)
+                task = json.loads(raw_task)
+                self.assertEqual(task["task_type"], TASK_TRANSCRIBE_JOB)
+                self.assertEqual(task["lesson_id"], job_id)
+
+                status_response = client.get(f"/api/transcribe/jobs/{job_id}")
+                self.assertEqual(status_response.status_code, 200)
+                self.assertEqual(status_response.json()["status"], "queued")
+
+        with patch("tutor_assistant.worker.transcribe_audio", return_value="ready transcript"):
+            process_transcription_job(job_id)
+
+        with TestClient(app) as client:
+            done_response = client.get(f"/api/transcribe/jobs/{job_id}")
+            self.assertEqual(done_response.status_code, 200)
+            done_payload = done_response.json()
+            self.assertEqual(done_payload["status"], "done")
+            self.assertEqual(done_payload["transcript_text"], "ready transcript")
+
+        with SessionLocal() as db:
+            job = db.query(TranscriptionJob).filter(TranscriptionJob.id == UUID(job_id)).first()
+            self.assertIsNotNone(job)
+            self.assertEqual(job.status, "done")
+            self.assertIsNotNone(job.transcript_path)
+            self.assertTrue(Path(job.transcript_path or "").exists())
+
+    def test_retry_failed_job_puts_it_back_in_queue(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"fake-audio-bytes", "audio/webm")},
+                )
+                self.assertEqual(response.status_code, 202)
+                job_id = response.json()["job_id"]
+                self._job_ids.append(job_id)
+
+                with SessionLocal() as db:
+                    job = db.query(TranscriptionJob).filter(TranscriptionJob.id == UUID(job_id)).first()
+                    self.assertIsNotNone(job)
+                    job.status = "failed"
+                    job.processing_error = "forced failure from test"
+                    db.commit()
+
+                retry_response = client.post(f"/api/transcribe/jobs/{job_id}/retry")
+                self.assertEqual(retry_response.status_code, 200)
+                retry_payload = retry_response.json()
+                self.assertEqual(retry_payload["status"], "queued")
+                self.assertTrue(retry_payload["queued"])
+
+                self.assertEqual(len(redis_stub.pushed), 2)
+                _, raw_task = redis_stub.pushed[-1]
+                task = json.loads(raw_task)
+                self.assertEqual(task["task_type"], TASK_TRANSCRIBE_JOB)
+                self.assertEqual(task["lesson_id"], job_id)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

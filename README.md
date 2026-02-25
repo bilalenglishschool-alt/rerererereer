@@ -13,6 +13,7 @@ Docker Compose проект с сервисами:
 - Invite onboarding работает через `/start invite_<token>`.
 - Worker и backend разделены, связь через Redis queue.
 - PII-safe webhook logging: логируются только `update_id`, `event_type`, `from_user_id`.
+- Отдельный Whisper transcription flow: `/transcribe` + `transcription_jobs`.
 
 ## Переменные окружения (.env)
 - `BOT_TOKEN`
@@ -84,6 +85,14 @@ curl http://localhost:${HOST_PORT:-8000}/health
 
 Строгий порядок для text-flow: `in_progress -> processing -> draft_ready -> sent`.
 
+### 3) Whisper transcription flow (web/API)
+1. Открыть `/transcribe` и загрузить аудио.
+2. Backend создаёт `transcription_jobs` запись в статусе `queued`.
+3. В Redis ставится задача `task_type=transcribe_job`.
+4. Worker делает транскрибацию через Whisper и сохраняет `transcript.txt`.
+5. Статус/результат доступен через `GET /api/transcribe/jobs/{job_id}`.
+6. При статусе `failed` можно выполнить `POST /api/transcribe/jobs/{job_id}/retry`.
+
 ## Каноничная схема
 Таблицы:
 - `tutors`
@@ -93,6 +102,7 @@ curl http://localhost:${HOST_PORT:-8000}/health
 - `lessons`
 - `lesson_chunks`
 - `artifacts`
+- `transcription_jobs`
 - `alembic_version`
 
 Ключевые инварианты:
@@ -100,6 +110,7 @@ curl http://localhost:${HOST_PORT:-8000}/health
 - `tutor_student` composite PK (`tutor_id`, `student_id`).
 - `invites.token` unique.
 - Один `in_progress` lesson на tutor (partial unique index в `lessons`).
+- Для transcription-job хранится статус/ошибка/число попыток в `transcription_jobs`.
 
 ## Документация
 - Runtime snapshot: `CURRENT_STATE.md`
@@ -125,6 +136,7 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
 Покрытые блоки:
 - lesson lifecycle (text flow)
 - invite-flow (invalid/expired/used/idempotent)
+- whisper transcription flow (create/status/retry + worker success path)
 - webhook logging privacy regression
 - worker retry policy (requeue/dead-letter)
 

@@ -175,3 +175,22 @@ class Artifact(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
     lesson: Mapped[Lesson] = relationship("Lesson", back_populates="artifacts")
+
+
+class TranscriptionJob(Base):
+    __tablename__ = "transcription_jobs"
+    __table_args__ = (
+        Index("ix_transcription_jobs_status_created_at", "status", "created_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    source_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    transcript_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    transcript_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False)
+    processing_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

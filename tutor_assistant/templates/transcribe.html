@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Whisper Transcription</title>
+  <style>
+    :root {
+      --bg: #f7fafc;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --accent: #0f766e;
+      --warn: #b45309;
+      --error: #b91c1c;
+      --ok: #047857;
+      --border: #d1d5db;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 20px;
+      font-family: "Noto Sans", "Segoe UI", sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at top left, #e6fffa 0%, var(--bg) 48%, #eef2ff 100%);
+    }
+
+    .card {
+      width: min(760px, 100%);
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      box-shadow: 0 20px 32px rgba(15, 23, 42, 0.10);
+      padding: 24px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.55rem;
+    }
+
+    p.meta {
+      margin: 0 0 18px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+
+    input[type="file"] {
+      flex: 1;
+      min-width: 220px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      background: #fff;
+    }
+
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 11px 16px;
+      cursor: pointer;
+      font-size: 0.98rem;
+      transition: transform .08s ease, opacity .2s ease;
+    }
+
+    button:active { transform: translateY(1px); }
+    button[disabled] { opacity: .6; cursor: not-allowed; }
+
+    .primary { background: var(--accent); color: #fff; }
+    .secondary { background: #e5e7eb; color: #111827; }
+
+    .status {
+      border-radius: 10px;
+      padding: 10px 12px;
+      background: #ecfeff;
+      color: #134e4a;
+      margin-bottom: 12px;
+    }
+
+    .status.warn { background: #fff7ed; color: var(--warn); }
+    .status.error { background: #fee2e2; color: var(--error); }
+    .status.ok { background: #d1fae5; color: var(--ok); }
+
+    .kv {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 220px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      resize: vertical;
+      font: inherit;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Whisper Transcription</h1>
+    <p class="meta">
+      Загрузите аудио-файл, система поставит задачу в очередь и вернет готовый текст после обработки.
+    </p>
+
+    <div class="row">
+      <input id="audioInput" type="file" accept="audio/*,.webm,.mp3,.wav,.m4a,.ogg" />
+      <button id="uploadBtn" class="primary">Транскрибировать</button>
+      <button id="retryBtn" class="secondary" hidden>Retry</button>
+    </div>
+
+    <div id="status" class="status">Ожидание файла.</div>
+    <p id="meta" class="kv">Job: -</p>
+    <textarea id="result" placeholder="Здесь появится транскрипт..." readonly></textarea>
+  </main>
+
+  <script>
+    const audioInput = document.getElementById("audioInput");
+    const uploadBtn = document.getElementById("uploadBtn");
+    const retryBtn = document.getElementById("retryBtn");
+    const statusEl = document.getElementById("status");
+    const metaEl = document.getElementById("meta");
+    const resultEl = document.getElementById("result");
+
+    let activeJobId = "";
+    let pollingTimer = null;
+
+    function setStatus(text, cls = "") {
+      statusEl.textContent = text;
+      statusEl.className = `status ${cls}`.trim();
+    }
+
+    function setMeta(text) {
+      metaEl.textContent = text;
+    }
+
+    function stopPolling() {
+      if (pollingTimer) {
+        window.clearTimeout(pollingTimer);
+        pollingTimer = null;
+      }
+    }
+
+    async function fetchJob(jobId) {
+      const response = await fetch(`/api/transcribe/jobs/${encodeURIComponent(jobId)}`);
+      if (!response.ok) {
+        throw new Error(`status check failed: HTTP ${response.status}`);
+      }
+      return response.json();
+    }
+
+    function schedulePoll() {
+      stopPolling();
+      pollingTimer = window.setTimeout(pollJob, 2000);
+    }
+
+    async function pollJob() {
+      if (!activeJobId) {
+        return;
+      }
+      try {
+        const payload = await fetchJob(activeJobId);
+        setMeta(
+          `Job: ${payload.job_id} | status: ${payload.status} | attempts: ${payload.processing_attempts}`
+        );
+
+        if (payload.status === "done") {
+          setStatus("Готово: транскрибация завершена.", "ok");
+          resultEl.value = payload.transcript_text || "";
+          retryBtn.hidden = true;
+          uploadBtn.disabled = false;
+          stopPolling();
+          return;
+        }
+
+        if (payload.status === "failed") {
+          setStatus(
+            `Ошибка обработки: ${payload.processing_error || "неизвестно"}`,
+            "error"
+          );
+          retryBtn.hidden = false;
+          uploadBtn.disabled = false;
+          stopPolling();
+          return;
+        }
+
+        setStatus("Задача в работе, обновляю статус...", "warn");
+        schedulePoll();
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        setStatus(`Не удалось получить статус: ${text}`, "error");
+        uploadBtn.disabled = false;
+        retryBtn.hidden = false;
+      }
+    }
+
+    async function createJob() {
+      const file = audioInput.files && audioInput.files[0];
+      if (!file) {
+        setStatus("Сначала выберите аудио-файл.", "warn");
+        return;
+      }
+
+      const form = new FormData();
+      form.append("audio", file, file.name);
+
+      uploadBtn.disabled = true;
+      retryBtn.hidden = true;
+      setStatus("Загружаю файл и ставлю задачу в очередь...", "warn");
+      resultEl.value = "";
+
+      try {
+        const response = await fetch("/api/transcribe/jobs", {
+          method: "POST",
+          body: form,
+        });
+        if (!response.ok) {
+          let detail = `HTTP ${response.status}`;
+          try {
+            const payload = await response.json();
+            if (payload && payload.detail) {
+              detail = String(payload.detail);
+            }
+          } catch (_err) {
+            // no-op
+          }
+          throw new Error(detail);
+        }
+
+        const payload = await response.json();
+        activeJobId = payload.job_id;
+        setMeta(
+          `Job: ${payload.job_id} | status: ${payload.status} | attempts: ${payload.processing_attempts}`
+        );
+        setStatus("Задача поставлена в очередь. Ожидаем результат...", "warn");
+        schedulePoll();
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        setStatus(`Не удалось создать задачу: ${text}`, "error");
+        uploadBtn.disabled = false;
+      }
+    }
+
+    async function retryJob() {
+      if (!activeJobId) {
+        return;
+      }
+      uploadBtn.disabled = true;
+      retryBtn.hidden = true;
+      setStatus("Перезапускаю задачу...", "warn");
+      resultEl.value = "";
+
+      try {
+        const response = await fetch(
+          `/api/transcribe/jobs/${encodeURIComponent(activeJobId)}/retry`,
+          { method: "POST" }
+        );
+        if (!response.ok) {
+          let detail = `HTTP ${response.status}`;
+          try {
+            const payload = await response.json();
+            if (payload && payload.detail) {
+              detail = String(payload.detail);
+            }
+          } catch (_err) {
+            // no-op
+          }
+          throw new Error(detail);
+        }
+
+        setStatus("Повторный запуск принят. Ожидаем...", "warn");
+        schedulePoll();
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        setStatus(`Retry не выполнен: ${text}`, "error");
+        uploadBtn.disabled = false;
+        retryBtn.hidden = false;
+      }
+    }
+
+    uploadBtn.addEventListener("click", () => {
+      void createJob();
+    });
+    retryBtn.addEventListener("click", () => {
+      void retryJob();
+    });
+  </script>
+</body>
+</html>

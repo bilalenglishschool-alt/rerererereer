@@ -124,11 +124,12 @@ docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
   - `GET /metrics/worker`
   - `GET /metrics/worker/prometheus`
   - `GET /alerts/worker`
-  - alerts thresholds: `worker_errors_last_10m`, `dead_letter_depth`, `queue_depth`
+  - alerts thresholds: `worker_errors_last_10m`, `dead_letter_depth`, `queue_depth`, `worker_heartbeat_age_seconds`
   - при недоступном Redis endpoints worker metrics/alerts возвращают `503`
   - fields: `tasks_processed_total`, `task_failures_total`, `worker_errors_last_10m`,
     `queue_depth`, `processing_depth`, `dead_letter_depth`,
-    `queue_latency_ms_last/max/avg`, `processing_duration_ms_last/max/avg`
+    `queue_latency_ms_last/max/avg`, `processing_duration_ms_last/max/avg`,
+    `worker_heartbeat_ts`, `worker_heartbeat_age_seconds`
   - Prometheus format: text `version=0.0.4`
 - External monitor helper:
   - `python -m tutor_assistant.ops.check_worker_alerts`

@@ -6,7 +6,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 from redis.exceptions import RedisError
 from sqlalchemy import text
@@ -162,16 +162,19 @@ def parse_job_id(job_id: str) -> UUID:
         raise HTTPException(status_code=400, detail="job_id must be UUID") from exc
 
 
-def serialize_transcription_job(job: TranscriptionJob) -> dict:
-    return {
+def serialize_transcription_job(job: TranscriptionJob, include_text: bool = True) -> dict:
+    payload = {
         "job_id": str(job.id),
         "status": job.status,
         "processing_attempts": int(job.processing_attempts or 0),
         "processing_error": job.processing_error,
         "created_at": job.created_at.isoformat() if job.created_at else None,
         "processed_at": job.processed_at.isoformat() if job.processed_at else None,
-        "transcript_text": job.transcript_text,
+        "has_transcript": bool((job.transcript_text or "").strip() or job.transcript_path),
     }
+    if include_text:
+        payload["transcript_text"] = job.transcript_text
+    return payload
 
 
 def get_request_client_id(request: Request) -> str:
@@ -438,6 +441,23 @@ async def create_transcription_job(
     return serialize_transcription_job(job)
 
 
+@app.get("/api/transcribe/jobs")
+def list_transcription_jobs(
+    limit: int = Query(20, ge=1, le=100),
+    db: Session = Depends(get_db),
+) -> dict:
+    jobs = (
+        db.query(TranscriptionJob)
+        .order_by(TranscriptionJob.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return {
+        "items": [serialize_transcription_job(job, include_text=False) for job in jobs],
+        "count": len(jobs),
+    }
+
+
 @app.get("/api/transcribe/jobs/{job_id}")
 def get_transcription_job(job_id: str, db: Session = Depends(get_db)) -> dict:
     job_uuid = parse_job_id(job_id)
@@ -487,6 +507,33 @@ def retry_transcription_job(job_id: str, db: Session = Depends(get_db)) -> dict:
     payload = serialize_transcription_job(job)
     payload["queued"] = True
     return payload
+
+
+@app.get("/api/transcribe/jobs/{job_id}/transcript")
+def download_transcription_transcript(
+    job_id: str,
+    db: Session = Depends(get_db),
+) -> PlainTextResponse:
+    job_uuid = parse_job_id(job_id)
+    job = db.query(TranscriptionJob).filter(TranscriptionJob.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Transcription job not found")
+
+    transcript_text = (job.transcript_text or "").strip()
+    if not transcript_text and job.transcript_path:
+        transcript_path = Path(job.transcript_path)
+        if transcript_path.exists() and transcript_path.is_file():
+            transcript_text = transcript_path.read_text(encoding="utf-8")
+
+    if not transcript_text:
+        raise HTTPException(status_code=409, detail="Transcript is not ready yet")
+
+    safe_job_id = str(job.id)
+    return PlainTextResponse(
+        content=transcript_text,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="transcript-{safe_job_id}.txt"'},
+    )
 
 
 @app.get("/lesson/{lesson_id}", response_class=HTMLResponse)

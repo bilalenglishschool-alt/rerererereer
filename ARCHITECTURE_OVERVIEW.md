@@ -64,6 +64,7 @@
 6. Для `failed` доступен `POST /api/transcribe/jobs/{job_id}/retry`.
 7. Для защиты backend применяет upload validation и rate limit (`6 req/min` на IP).
 8. Worker периодически чистит старые `done/failed` transcription jobs и удаляет их файлы.
+9. Для UX доступны `GET /api/transcribe/jobs` (history) и `GET /api/transcribe/jobs/{job_id}/transcript`.
 
 ## 5) Queue протокол
 Redis list `lesson_tasks`.

@@ -29,7 +29,9 @@
 - Endpoint alerting: `GET /alerts/worker` по порогам `worker_errors_last_10m` и `dead_letter_depth`.
 - Whisper transcription jobs:
   - `POST /api/transcribe/jobs`
+  - `GET /api/transcribe/jobs`
   - `GET /api/transcribe/jobs/{job_id}`
+  - `GET /api/transcribe/jobs/{job_id}/transcript`
   - `POST /api/transcribe/jobs/{job_id}/retry`
   - web UI `/transcribe`.
   - защита API: размер/тип файла + rate limit (`6` загрузок в минуту на IP).

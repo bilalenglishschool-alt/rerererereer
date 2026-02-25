@@ -110,6 +110,46 @@
       font: inherit;
       line-height: 1.4;
     }
+
+    .history {
+      margin-top: 14px;
+      border-top: 1px solid var(--border);
+      padding-top: 14px;
+    }
+
+    .history h2 {
+      margin: 0 0 8px;
+      font-size: 1.05rem;
+    }
+
+    .jobs {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 8px;
+    }
+
+    .jobs li {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: #fbfbfc;
+    }
+
+    .jobs .meta {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.35;
+      flex: 1;
+      min-width: 220px;
+    }
   </style>
 </head>
 <body>
@@ -125,18 +165,35 @@
       <button id="retryBtn" class="secondary" hidden>Retry</button>
     </div>
 
+    <div class="row">
+      <button id="copyBtn" class="secondary" disabled>Copy text</button>
+      <button id="downloadBtn" class="secondary" disabled>Download .txt</button>
+      <button id="refreshBtn" class="secondary">Обновить список</button>
+    </div>
+
     <div id="status" class="status">Ожидание файла.</div>
     <p id="meta" class="kv">Job: -</p>
     <textarea id="result" placeholder="Здесь появится транскрипт..." readonly></textarea>
+
+    <section class="history">
+      <h2>Последние задачи</h2>
+      <ul id="jobsList" class="jobs">
+        <li><p class="meta">Список пуст.</p></li>
+      </ul>
+    </section>
   </main>
 
   <script>
     const audioInput = document.getElementById("audioInput");
     const uploadBtn = document.getElementById("uploadBtn");
     const retryBtn = document.getElementById("retryBtn");
+    const copyBtn = document.getElementById("copyBtn");
+    const downloadBtn = document.getElementById("downloadBtn");
+    const refreshBtn = document.getElementById("refreshBtn");
     const statusEl = document.getElementById("status");
     const metaEl = document.getElementById("meta");
     const resultEl = document.getElementById("result");
+    const jobsListEl = document.getElementById("jobsList");
 
     let activeJobId = "";
     let pollingTimer = null;
@@ -148,6 +205,23 @@
 
     function setMeta(text) {
       metaEl.textContent = text;
+    }
+
+    function formatDate(value) {
+      if (!value) {
+        return "-";
+      }
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) {
+        return value;
+      }
+      return d.toLocaleString();
+    }
+
+    function syncResultActions() {
+      const hasText = Boolean(resultEl.value && resultEl.value.trim());
+      copyBtn.disabled = !hasText;
+      downloadBtn.disabled = !(activeJobId && hasText);
     }
 
     function stopPolling() {
@@ -165,6 +239,91 @@
       return response.json();
     }
 
+    async function fetchJobs(limit = 20) {
+      const response = await fetch(`/api/transcribe/jobs?limit=${encodeURIComponent(limit)}`);
+      if (!response.ok) {
+        throw new Error(`jobs list failed: HTTP ${response.status}`);
+      }
+      return response.json();
+    }
+
+    function renderJobs(items) {
+      jobsListEl.innerHTML = "";
+      if (!Array.isArray(items) || items.length === 0) {
+        const li = document.createElement("li");
+        li.innerHTML = '<p class="meta">Список пуст.</p>';
+        jobsListEl.appendChild(li);
+        return;
+      }
+
+      for (const item of items) {
+        const li = document.createElement("li");
+        const meta = document.createElement("p");
+        meta.className = "meta";
+        meta.textContent = `#${item.job_id} | status=${item.status} | attempts=${item.processing_attempts} | created=${formatDate(item.created_at)}`;
+
+        const btn = document.createElement("button");
+        btn.className = "secondary";
+        btn.textContent = "Открыть";
+        btn.addEventListener("click", () => {
+          void loadJob(item.job_id);
+        });
+
+        li.appendChild(meta);
+        li.appendChild(btn);
+        jobsListEl.appendChild(li);
+      }
+    }
+
+    async function refreshJobs() {
+      try {
+        const payload = await fetchJobs();
+        renderJobs(payload.items || []);
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        setStatus(`Не удалось загрузить список: ${text}`, "error");
+      }
+    }
+
+    function applyJobPayload(payload, source = "poll") {
+      activeJobId = payload.job_id || "";
+      setMeta(
+        `Job: ${payload.job_id} | status: ${payload.status} | attempts: ${payload.processing_attempts} | created: ${formatDate(payload.created_at)}`
+      );
+      resultEl.value = payload.transcript_text || "";
+      syncResultActions();
+
+      if (payload.status === "done") {
+        setStatus("Готово: транскрибация завершена.", "ok");
+        retryBtn.hidden = true;
+        uploadBtn.disabled = false;
+      } else if (payload.status === "failed") {
+        setStatus(`Ошибка обработки: ${payload.processing_error || "неизвестно"}`, "error");
+        retryBtn.hidden = false;
+        uploadBtn.disabled = false;
+      } else if (source === "load") {
+        setStatus("Задача загружена, обновляю статус...", "warn");
+        retryBtn.hidden = true;
+        schedulePoll();
+      }
+    }
+
+    async function loadJob(jobId) {
+      try {
+        setStatus("Загружаю задачу...", "warn");
+        const payload = await fetchJob(jobId);
+        applyJobPayload(payload, "load");
+        if (payload.status === "queued" || payload.status === "processing") {
+          schedulePoll();
+        } else {
+          stopPolling();
+        }
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        setStatus(`Не удалось открыть задачу: ${text}`, "error");
+      }
+    }
+
     function schedulePoll() {
       stopPolling();
       pollingTimer = window.setTimeout(pollJob, 2000);
@@ -176,32 +335,14 @@
       }
       try {
         const payload = await fetchJob(activeJobId);
-        setMeta(
-          `Job: ${payload.job_id} | status: ${payload.status} | attempts: ${payload.processing_attempts}`
-        );
-
-        if (payload.status === "done") {
-          setStatus("Готово: транскрибация завершена.", "ok");
-          resultEl.value = payload.transcript_text || "";
-          retryBtn.hidden = true;
-          uploadBtn.disabled = false;
-          stopPolling();
+        applyJobPayload(payload, "poll");
+        if (payload.status === "queued" || payload.status === "processing") {
+          setStatus("Задача в работе, обновляю статус...", "warn");
+          schedulePoll();
           return;
         }
-
-        if (payload.status === "failed") {
-          setStatus(
-            `Ошибка обработки: ${payload.processing_error || "неизвестно"}`,
-            "error"
-          );
-          retryBtn.hidden = false;
-          uploadBtn.disabled = false;
-          stopPolling();
-          return;
-        }
-
-        setStatus("Задача в работе, обновляю статус...", "warn");
-        schedulePoll();
+        stopPolling();
+        await refreshJobs();
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
         setStatus(`Не удалось получить статус: ${text}`, "error");
@@ -244,11 +385,9 @@
         }
 
         const payload = await response.json();
-        activeJobId = payload.job_id;
-        setMeta(
-          `Job: ${payload.job_id} | status: ${payload.status} | attempts: ${payload.processing_attempts}`
-        );
+        applyJobPayload(payload, "create");
         setStatus("Задача поставлена в очередь. Ожидаем результат...", "warn");
+        await refreshJobs();
         schedulePoll();
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
@@ -284,7 +423,10 @@
           throw new Error(detail);
         }
 
+        const payload = await response.json();
+        applyJobPayload(payload, "retry");
         setStatus("Повторный запуск принят. Ожидаем...", "warn");
+        await refreshJobs();
         schedulePoll();
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
@@ -294,12 +436,76 @@
       }
     }
 
+    async function copyTranscript() {
+      const text = (resultEl.value || "").trim();
+      if (!text) {
+        setStatus("Текста для копирования нет.", "warn");
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(text);
+        setStatus("Транскрипт скопирован в буфер обмена.", "ok");
+      } catch (_error) {
+        setStatus("Не удалось скопировать текст.", "error");
+      }
+    }
+
+    async function downloadTranscript() {
+      if (!activeJobId) {
+        setStatus("Сначала выберите задачу.", "warn");
+        return;
+      }
+      try {
+        const response = await fetch(
+          `/api/transcribe/jobs/${encodeURIComponent(activeJobId)}/transcript`
+        );
+        if (!response.ok) {
+          let detail = `HTTP ${response.status}`;
+          try {
+            const payload = await response.json();
+            if (payload && payload.detail) {
+              detail = String(payload.detail);
+            }
+          } catch (_err) {
+            // no-op
+          }
+          throw new Error(detail);
+        }
+
+        const blob = await response.blob();
+        const link = document.createElement("a");
+        const url = URL.createObjectURL(blob);
+        link.href = url;
+        link.download = `transcript-${activeJobId}.txt`;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        setStatus("Файл транскрипта скачан.", "ok");
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        setStatus(`Не удалось скачать transcript: ${text}`, "error");
+      }
+    }
+
     uploadBtn.addEventListener("click", () => {
       void createJob();
     });
     retryBtn.addEventListener("click", () => {
       void retryJob();
     });
+    copyBtn.addEventListener("click", () => {
+      void copyTranscript();
+    });
+    downloadBtn.addEventListener("click", () => {
+      void downloadTranscript();
+    });
+    refreshBtn.addEventListener("click", () => {
+      void refreshJobs();
+    });
+
+    syncResultActions();
+    void refreshJobs();
   </script>
 </body>
 </html>

@@ -21,17 +21,53 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 app = FastAPI(title="Tutor Assistant MVP")
+
+
+def _extract_webhook_meta(update: object) -> tuple[object, str, object]:
+    if not isinstance(update, dict):
+        return None, "unknown", None
+
+    update_id = update.get("update_id")
+    event_type = "unknown"
+    from_user_id = None
+
+    for key in (
+        "message",
+        "edited_message",
+        "callback_query",
+        "my_chat_member",
+        "chat_member",
+        "channel_post",
+    ):
+        if key not in update:
+            continue
+
+        event_type = key
+        payload = update.get(key)
+        if isinstance(payload, dict):
+            actor = payload.get("from")
+            if isinstance(actor, dict):
+                from_user_id = actor.get("id")
+        break
+
+    return update_id, event_type, from_user_id
+
+
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
-    # получаем апдейт от Telegram и отдаём в бота
     update = await request.json()
-    logger.info("TG webhook update keys=%s", list(update.keys()) if isinstance(update, dict) else type(update))
-    logger.info("TG webhook update=%s", update)
+    update_id, event_type, from_user_id = _extract_webhook_meta(update)
+    logger.info(
+        "TG webhook update_id=%s event=%s from_user_id=%s",
+        update_id,
+        event_type,
+        from_user_id,
+    )
 
     try:
         from tutor_assistant.bot import process_update
         await process_update(update)
-    except Exception as e:
+    except Exception:  # noqa: BLE001
         logger.exception("webhook error")
 
     return {"ok": True}

@@ -143,6 +143,15 @@ docker compose logs -f bot
 docker compose exec backend python -m unittest discover -s tutor_assistant/tests -p 'test_*.py' -v
 ```
 
+## CI (GitHub Actions)
+- Workflow: `.github/workflows/ci.yml`
+- Запускается на `push` (`main`, `codex/**`) и на `pull_request`.
+- Шаги:
+  - поднимает `postgres` и `redis` services
+  - выполняет `alembic upgrade head`
+  - выполняет `alembic check`
+  - запускает `python -m unittest discover ...`
+
 Покрытые блоки:
 - lesson lifecycle (text flow)
 - invite-flow (invalid/expired/used/idempotent)

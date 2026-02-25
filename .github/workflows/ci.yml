@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+  pull_request:
+
+jobs:
+  test-and-schema-check:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: tutor_assistant
+          POSTGRES_USER: tutor_assistant
+          POSTGRES_PASSWORD: tutor_assistant_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tutor_assistant -d tutor_assistant"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      BOT_TOKEN: ci-test-token
+      BASE_URL: http://localhost:8000
+      STORAGE_PATH: ${{ github.workspace }}/.ci-data
+      LLM_PROVIDER: none
+      LLM_API_KEY: ""
+      WHISPER_MODEL: base
+      TRANSCRIPTION_RETENTION_DAYS: "14"
+      TRANSCRIPTION_CLEANUP_INTERVAL_SECONDS: "600"
+      WORKER_ALERT_ERRORS_LAST_10M_THRESHOLD: "0"
+      WORKER_ALERT_DEAD_LETTER_THRESHOLD: "0"
+      POSTGRES_DB: tutor_assistant
+      POSTGRES_USER: tutor_assistant
+      POSTGRES_PASSWORD: tutor_assistant_password
+      DATABASE_URL: postgresql+psycopg://tutor_assistant:tutor_assistant_password@localhost:5432/tutor_assistant
+      REDIS_URL: redis://localhost:6379/0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Wait for Postgres and Redis
+        run: |
+          python - <<'PY'
+          import time
+          import psycopg
+          from redis import Redis
+
+          for _ in range(60):
+              try:
+                  with psycopg.connect("postgresql://tutor_assistant:tutor_assistant_password@localhost:5432/tutor_assistant"):
+                      break
+              except Exception:
+                  time.sleep(1)
+          else:
+              raise SystemExit("Postgres did not become ready in time")
+
+          redis = Redis.from_url("redis://localhost:6379/0")
+          for _ in range(60):
+              try:
+                  if redis.ping():
+                      break
+              except Exception:
+                  pass
+              time.sleep(1)
+          else:
+              raise SystemExit("Redis did not become ready in time")
+          PY
+
+      - name: Ensure storage path exists
+        run: mkdir -p "${STORAGE_PATH}"
+
+      - name: Apply Alembic migrations
+        run: alembic -c alembic.ini upgrade head
+
+      - name: Check model/schema drift
+        run: alembic -c alembic.ini check
+
+      - name: Run tests
+        run: python -m unittest discover -s tutor_assistant/tests -p 'test_*.py' -v

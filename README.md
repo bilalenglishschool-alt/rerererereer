@@ -104,6 +104,7 @@ curl http://localhost:${HOST_PORT:-8000}/health
 ## Документация
 - Runtime snapshot: `CURRENT_STATE.md`
 - Prod reset rollout: `DEPLOY_RESET_DB.md`
+- Prod go-live checklist: `PROD_GO_LIVE_CHECKLIST.md`
 - Архитектура: `ARCHITECTURE_OVERVIEW.md`
 - Контекст проекта: `PROJECT_CONTEXT.md`
 

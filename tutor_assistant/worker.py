@@ -23,6 +23,7 @@ from .queue import (
     WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY,
     WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY,
     WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY,
+    WORKER_METRIC_HEARTBEAT_TS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY,
@@ -117,6 +118,13 @@ def record_processing_duration(redis_client, duration_ms: int) -> None:
         sum_key=WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY,
         samples_key=WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY,
     )
+
+
+def record_worker_heartbeat(redis_client) -> None:
+    try:
+        redis_client.set(WORKER_METRIC_HEARTBEAT_TS_KEY, int(time.time()))
+    except Exception:  # noqa: BLE001
+        logger.debug("Failed to record worker heartbeat", exc_info=True)
 
 
 def handle_task_failure(redis_client, raw_task: str, lesson_id: str, task_type: str, exc: Exception) -> str:
@@ -532,6 +540,7 @@ def main() -> None:
     last_cleanup_run = run_periodic_cleanup(0.0)
 
     while True:
+        record_worker_heartbeat(redis_client)
         last_cleanup_run = run_periodic_cleanup(last_cleanup_run)
         raw_task = reserve_task(redis_client, timeout_seconds=5)
         if not raw_task:

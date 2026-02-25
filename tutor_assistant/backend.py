@@ -25,6 +25,7 @@ from .queue import (
     WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY,
     WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY,
     WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY,
+    WORKER_METRIC_HEARTBEAT_TS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY,
@@ -142,6 +143,18 @@ WORKER_PROMETHEUS_METRICS: tuple[tuple[str, str, str, str], ...] = (
         "tutor_assistant_worker_processing_duration_ms_avg",
         "gauge",
         "Average observed processing duration in milliseconds.",
+    ),
+    (
+        "worker_heartbeat_ts",
+        "tutor_assistant_worker_heartbeat_timestamp_seconds",
+        "gauge",
+        "Unix timestamp of the latest worker heartbeat.",
+    ),
+    (
+        "worker_heartbeat_age_seconds",
+        "tutor_assistant_worker_heartbeat_age_seconds",
+        "gauge",
+        "Age of latest worker heartbeat in seconds.",
     ),
 )
 
@@ -377,6 +390,8 @@ def collect_worker_metrics(redis_client) -> dict[str, int | float]:
     queue_latency_samples = int(redis_client.get(WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY) or 0)
     processing_duration_sum = int(redis_client.get(WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY) or 0)
     processing_duration_samples = int(redis_client.get(WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY) or 0)
+    heartbeat_ts = int(redis_client.get(WORKER_METRIC_HEARTBEAT_TS_KEY) or 0)
+    heartbeat_age_seconds = max(0, now_ts - heartbeat_ts) if heartbeat_ts > 0 else -1
 
     return {
         "tasks_processed_total": int(redis_client.get(WORKER_METRIC_TASKS_PROCESSED_KEY) or 0),
@@ -403,6 +418,8 @@ def collect_worker_metrics(redis_client) -> dict[str, int | float]:
             if processing_duration_samples
             else 0.0
         ),
+        "worker_heartbeat_ts": heartbeat_ts,
+        "worker_heartbeat_age_seconds": heartbeat_age_seconds,
     }
 
 
@@ -431,10 +448,12 @@ def evaluate_worker_alerts(metrics: dict[str, int | float]) -> list[str]:
     error_threshold = int(settings.worker_alert_errors_last_10m_threshold)
     dead_letter_threshold = int(settings.worker_alert_dead_letter_threshold)
     queue_depth_threshold = int(settings.worker_alert_queue_depth_threshold)
+    heartbeat_age_threshold = int(settings.worker_alert_heartbeat_age_seconds_threshold)
 
     errors_last_10m = int(metrics.get("worker_errors_last_10m", 0))
     dead_letter_depth = int(metrics.get("dead_letter_depth", 0))
     queue_depth = int(metrics.get("queue_depth", 0))
+    heartbeat_age_seconds = int(metrics.get("worker_heartbeat_age_seconds", -1))
 
     if errors_last_10m > error_threshold:
         alerts.append(
@@ -450,6 +469,13 @@ def evaluate_worker_alerts(metrics: dict[str, int | float]) -> list[str]:
         alerts.append(
             "queue_depth exceeded threshold: "
             f"{queue_depth} > {queue_depth_threshold}"
+        )
+    if heartbeat_age_seconds < 0:
+        alerts.append("worker heartbeat missing")
+    elif heartbeat_age_seconds > heartbeat_age_threshold:
+        alerts.append(
+            "worker_heartbeat_age_seconds exceeded threshold: "
+            f"{heartbeat_age_seconds} > {heartbeat_age_threshold}"
         )
 
     return alerts
@@ -524,6 +550,9 @@ def worker_alerts() -> dict:
             "worker_errors_last_10m": int(settings.worker_alert_errors_last_10m_threshold),
             "dead_letter_depth": int(settings.worker_alert_dead_letter_threshold),
             "queue_depth": int(settings.worker_alert_queue_depth_threshold),
+            "worker_heartbeat_age_seconds": int(
+                settings.worker_alert_heartbeat_age_seconds_threshold
+            ),
         },
         "metrics": metrics,
     }

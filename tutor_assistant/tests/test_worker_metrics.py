@@ -16,6 +16,7 @@ from tutor_assistant.queue import (
     WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY,
     WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY,
     WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY,
+    WORKER_METRIC_HEARTBEAT_TS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY,
@@ -70,15 +71,17 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
                 WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY: 250,
                 WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY: 301,
                 WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY: 2,
+                WORKER_METRIC_HEARTBEAT_TS_KEY: 1995,
             },
             queue_depth=4,
             processing_depth=1,
             dead_letter_depth=0,
         )
 
-        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
-            with TestClient(app) as client:
-                response = client.get("/metrics/worker")
+        with patch("tutor_assistant.backend.time.time", return_value=2000):
+            with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+                with TestClient(app) as client:
+                    response = client.get("/metrics/worker")
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -94,6 +97,8 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["processing_duration_ms_last"], 180)
         self.assertEqual(payload["processing_duration_ms_max"], 250)
         self.assertEqual(payload["processing_duration_ms_avg"], 150.5)
+        self.assertEqual(payload["worker_heartbeat_ts"], 1995)
+        self.assertEqual(payload["worker_heartbeat_age_seconds"], 5)
         self.assertTrue(redis_stub.closed)
 
     def test_metrics_avg_fields_are_zero_when_no_samples(self) -> None:
@@ -113,6 +118,7 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["queue_latency_ms_avg"], 0.0)
         self.assertEqual(payload["processing_duration_ms_avg"], 0.0)
+        self.assertEqual(payload["worker_heartbeat_age_seconds"], -1)
         self.assertTrue(redis_stub.closed)
 
     def test_metrics_endpoint_returns_503_when_redis_unavailable(self) -> None:
@@ -137,14 +143,16 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
                 WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY: 250,
                 WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY: 301,
                 WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY: 2,
+                WORKER_METRIC_HEARTBEAT_TS_KEY: 1995,
             },
             queue_depth=4,
             processing_depth=1,
             dead_letter_depth=0,
         )
-        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
-            with TestClient(app) as client:
-                response = client.get("/metrics/worker/prometheus")
+        with patch("tutor_assistant.backend.time.time", return_value=2000):
+            with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+                with TestClient(app) as client:
+                    response = client.get("/metrics/worker/prometheus")
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/plain", response.headers.get("content-type", ""))
@@ -167,6 +175,14 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         )
         self.assertIn(
             "tutor_assistant_worker_processing_duration_ms_avg 150.5",
+            body,
+        )
+        self.assertIn(
+            "tutor_assistant_worker_heartbeat_timestamp_seconds 1995",
+            body,
+        )
+        self.assertIn(
+            "tutor_assistant_worker_heartbeat_age_seconds 5",
             body,
         )
         self.assertTrue(redis_stub.closed)

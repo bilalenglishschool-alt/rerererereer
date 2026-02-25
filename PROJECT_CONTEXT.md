@@ -57,5 +57,4 @@
 - Базовый вход: `README.md`
 
 ## Следующий этап (рекомендуемо)
-1. Добавить monitoring/alerting на `worker_errors_last_10m > 0`.
-2. Уточнить стратегию non-reset migrations для будущего прод-retention.
+1. Уточнить стратегию non-reset migrations для будущего прод-retention.

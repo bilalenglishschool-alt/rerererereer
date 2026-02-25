@@ -455,6 +455,20 @@ def evaluate_worker_alerts(metrics: dict[str, int | float]) -> list[str]:
     return alerts
 
 
+def load_worker_metrics_or_503() -> dict[str, int | float]:
+    redis_client = None
+    try:
+        redis_client = get_redis_client(settings)
+        return collect_worker_metrics(redis_client)
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail=f"Failed to read worker metrics: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"Failed to read worker metrics: {exc}") from exc
+    finally:
+        if redis_client is not None:
+            redis_client.close()
+
+
 @app.get("/health")
 def health(db: Session = Depends(get_db)) -> dict:
     postgres_ok = False
@@ -486,21 +500,12 @@ def health(db: Session = Depends(get_db)) -> dict:
 
 @app.get("/metrics/worker")
 def worker_metrics() -> dict:
-    redis_client = get_redis_client(settings)
-    try:
-        return collect_worker_metrics(redis_client)
-    finally:
-        redis_client.close()
+    return load_worker_metrics_or_503()
 
 
 @app.get("/metrics/worker/prometheus", response_class=PlainTextResponse)
 def worker_metrics_prometheus() -> PlainTextResponse:
-    redis_client = get_redis_client(settings)
-    try:
-        metrics = collect_worker_metrics(redis_client)
-    finally:
-        redis_client.close()
-
+    metrics = load_worker_metrics_or_503()
     payload = render_worker_metrics_prometheus(metrics)
     return PlainTextResponse(
         content=payload,
@@ -510,28 +515,18 @@ def worker_metrics_prometheus() -> PlainTextResponse:
 
 @app.get("/alerts/worker")
 def worker_alerts() -> dict:
-    redis_client = None
-    try:
-        redis_client = get_redis_client(settings)
-        metrics = collect_worker_metrics(redis_client)
-        alerts = evaluate_worker_alerts(metrics)
-        return {
-            "status": "alert" if alerts else "ok",
-            "alerts": alerts,
-            "thresholds": {
-                "worker_errors_last_10m": int(settings.worker_alert_errors_last_10m_threshold),
-                "dead_letter_depth": int(settings.worker_alert_dead_letter_threshold),
-                "queue_depth": int(settings.worker_alert_queue_depth_threshold),
-            },
-            "metrics": metrics,
-        }
-    except RedisError as exc:
-        raise HTTPException(status_code=503, detail=f"Failed to read worker metrics: {exc}") from exc
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=503, detail=f"Failed to read worker metrics: {exc}") from exc
-    finally:
-        if redis_client is not None:
-            redis_client.close()
+    metrics = load_worker_metrics_or_503()
+    alerts = evaluate_worker_alerts(metrics)
+    return {
+        "status": "alert" if alerts else "ok",
+        "alerts": alerts,
+        "thresholds": {
+            "worker_errors_last_10m": int(settings.worker_alert_errors_last_10m_threshold),
+            "dead_letter_depth": int(settings.worker_alert_dead_letter_threshold),
+            "queue_depth": int(settings.worker_alert_queue_depth_threshold),
+        },
+        "metrics": metrics,
+    }
 
 
 @app.get("/", response_class=HTMLResponse)

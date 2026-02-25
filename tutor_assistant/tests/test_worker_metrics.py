@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from redis.exceptions import RedisError
 
 from tutor_assistant.backend import app
 from tutor_assistant.queue import (
@@ -114,6 +115,14 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["processing_duration_ms_avg"], 0.0)
         self.assertTrue(redis_stub.closed)
 
+    def test_metrics_endpoint_returns_503_when_redis_unavailable(self) -> None:
+        with patch("tutor_assistant.backend.get_redis_client", side_effect=RedisError("down")):
+            with TestClient(app) as client:
+                response = client.get("/metrics/worker")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("Failed to read worker metrics", response.json().get("detail", ""))
+
     def test_prometheus_metrics_endpoint_returns_text_payload(self) -> None:
         redis_stub = _MetricsRedisStub(
             values={
@@ -161,6 +170,14 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
             body,
         )
         self.assertTrue(redis_stub.closed)
+
+    def test_prometheus_metrics_endpoint_returns_503_when_redis_unavailable(self) -> None:
+        with patch("tutor_assistant.backend.get_redis_client", side_effect=RedisError("down")):
+            with TestClient(app) as client:
+                response = client.get("/metrics/worker/prometheus")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("Failed to read worker metrics", response.json().get("detail", ""))
 
 
 if __name__ == "__main__":

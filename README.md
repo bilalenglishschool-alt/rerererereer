@@ -195,6 +195,7 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
   - `/metrics/worker/prometheus`:
     - text format `text/plain; version=0.0.4`
     - ready for Prometheus scrape
+  - when Redis is unavailable, metrics endpoints return `503`
 - External alert check script:
   - `python -m tutor_assistant.ops.check_worker_alerts`
   - env:

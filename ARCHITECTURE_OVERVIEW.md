@@ -99,6 +99,7 @@ Retry/failure policy:
 - endpoint `GET /metrics/worker`
 - endpoint `GET /metrics/worker/prometheus` (Prometheus text exposition)
 - alert endpoint `GET /alerts/worker` (сравнение с threshold из env: errors/dead_letter/queue_depth)
+- при недоступном Redis endpoints metrics/alerts возвращают `503`
 - external checker: `python -m tutor_assistant.ops.check_worker_alerts`
 - GitHub schedule monitor: `.github/workflows/worker-alert-monitor.yml` (секрет `WORKER_ALERT_URL`)
 

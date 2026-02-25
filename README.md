@@ -96,6 +96,8 @@ curl http://localhost:${HOST_PORT:-8000}/health
 4. Worker делает транскрибацию через Whisper и сохраняет `transcript.txt`.
 5. Статус/результат доступен через `GET /api/transcribe/jobs/{job_id}`.
 6. При статусе `failed` можно выполнить `POST /api/transcribe/jobs/{job_id}/retry`.
+7. История задач: `GET /api/transcribe/jobs?limit=20`.
+8. Скачивание transcript: `GET /api/transcribe/jobs/{job_id}/transcript`.
 
 Защита загрузки:
 - допустимые расширения: `.webm, .mp3, .wav, .m4a, .ogg, .flac, .aac, .mp4`

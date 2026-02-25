@@ -238,6 +238,89 @@ class TranscriptionFlowTest(unittest.TestCase):
                     self.assertEqual(second.status_code, 429)
                     self.assertIn("Rate limit exceeded", second.json().get("detail", ""))
 
+    def test_list_jobs_returns_recent_first(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                first_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"first-audio", "audio/webm")},
+                )
+                self.assertEqual(first_response.status_code, 202)
+                first_job_id = first_response.json()["job_id"]
+                self._job_ids.append(first_job_id)
+
+                second_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"second-audio", "audio/webm")},
+                )
+                self.assertEqual(second_response.status_code, 202)
+                second_job_id = second_response.json()["job_id"]
+                self._job_ids.append(second_job_id)
+
+                list_response = client.get("/api/transcribe/jobs?limit=20")
+                self.assertEqual(list_response.status_code, 200)
+                payload = list_response.json()
+                self.assertIn("items", payload)
+                items = payload["items"]
+                self.assertTrue(items)
+
+                by_id = {item["job_id"]: idx for idx, item in enumerate(items)}
+                self.assertIn(first_job_id, by_id)
+                self.assertIn(second_job_id, by_id)
+                self.assertLess(by_id[second_job_id], by_id[first_job_id])
+                self.assertNotIn("transcript_text", items[0])
+
+    def test_download_transcript_returns_409_when_not_ready(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                create_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"audio-bytes", "audio/webm")},
+                )
+                self.assertEqual(create_response.status_code, 202)
+                job_id = create_response.json()["job_id"]
+                self._job_ids.append(job_id)
+
+                download_response = client.get(f"/api/transcribe/jobs/{job_id}/transcript")
+                self.assertEqual(download_response.status_code, 409)
+                self.assertIn("Transcript is not ready yet", download_response.json().get("detail", ""))
+
+    def test_download_transcript_returns_text_when_ready(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                create_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"audio-bytes", "audio/webm")},
+                )
+                self.assertEqual(create_response.status_code, 202)
+                job_id = create_response.json()["job_id"]
+                self._job_ids.append(job_id)
+
+                with SessionLocal() as db:
+                    job = db.query(TranscriptionJob).filter(TranscriptionJob.id == UUID(job_id)).first()
+                    self.assertIsNotNone(job)
+                    job.status = "done"
+                    job.transcript_text = "Transcript content from test"
+                    db.commit()
+
+                download_response = client.get(f"/api/transcribe/jobs/{job_id}/transcript")
+                self.assertEqual(download_response.status_code, 200)
+                self.assertEqual(download_response.text, "Transcript content from test")
+                self.assertIn("text/plain", download_response.headers.get("content-type", ""))
+                self.assertIn(
+                    f'transcript-{job_id}.txt',
+                    download_response.headers.get("content-disposition", ""),
+                )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -13,7 +14,16 @@ from sqlalchemy.orm import Session
 from .config import get_settings
 from .database import get_db, init_db
 from .models import Artifact, Lesson, LessonChunk
-from .queue import enqueue_process_lesson, get_redis_client
+from .queue import (
+    LESSON_DEAD_LETTER_QUEUE_NAME,
+    LESSON_PROCESSING_QUEUE_NAME,
+    LESSON_QUEUE_NAME,
+    WORKER_FAILURE_EVENTS_ZSET_KEY,
+    WORKER_METRIC_TASKS_FAILED_KEY,
+    WORKER_METRIC_TASKS_PROCESSED_KEY,
+    enqueue_process_lesson,
+    get_redis_client,
+)
 from .storage import write_chunk
 from .time_utils import utcnow
 
@@ -134,6 +144,31 @@ def health(db: Session = Depends(get_db)) -> dict:
         "redis": redis_ok,
         "details": details,
     }
+
+
+@app.get("/metrics/worker")
+def worker_metrics() -> dict:
+    redis_client = get_redis_client(settings)
+    try:
+        now_ts = int(time.time())
+        ten_minutes_ago = now_ts - 600
+
+        processed_total = int(redis_client.get(WORKER_METRIC_TASKS_PROCESSED_KEY) or 0)
+        failed_total = int(redis_client.get(WORKER_METRIC_TASKS_FAILED_KEY) or 0)
+        failures_last_10m = int(
+            redis_client.zcount(WORKER_FAILURE_EVENTS_ZSET_KEY, ten_minutes_ago, now_ts)
+        )
+
+        return {
+            "tasks_processed_total": processed_total,
+            "task_failures_total": failed_total,
+            "worker_errors_last_10m": failures_last_10m,
+            "queue_depth": int(redis_client.llen(LESSON_QUEUE_NAME)),
+            "processing_depth": int(redis_client.llen(LESSON_PROCESSING_QUEUE_NAME)),
+            "dead_letter_depth": int(redis_client.llen(LESSON_DEAD_LETTER_QUEUE_NAME)),
+        }
+    finally:
+        redis_client.close()
 
 
 @app.get("/", response_class=HTMLResponse)

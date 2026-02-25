@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from redis import Redis
 
 from .config import Settings
+from .time_utils import utcnow
 
 LESSON_QUEUE_NAME = "lesson_tasks"
 LESSON_PROCESSING_QUEUE_NAME = "lesson_tasks:processing"
+LESSON_DEAD_LETTER_QUEUE_NAME = "lesson_tasks:dead"
 LESSON_LOCK_PREFIX = "lesson_task:lock:"
 TASK_PROCESS_AUDIO = "process_audio_lesson"
 TASK_GENERATE_ARTIFACTS = "generate_artifacts"
+WORKER_METRIC_TASKS_PROCESSED_KEY = "lesson_metrics:tasks_processed_total"
+WORKER_METRIC_TASKS_FAILED_KEY = "lesson_metrics:task_failures_total"
+WORKER_FAILURE_EVENTS_ZSET_KEY = "lesson_metrics:worker_failures"
 
 
 def get_redis_client(settings: Settings) -> Redis:
@@ -67,6 +73,30 @@ def requeue_task(redis_client: Redis, raw_task: str) -> None:
     pipeline = redis_client.pipeline(transaction=True)
     pipeline.lrem(LESSON_PROCESSING_QUEUE_NAME, 1, raw_task)
     pipeline.rpush(LESSON_QUEUE_NAME, raw_task)
+    pipeline.execute()
+
+
+def dead_letter_task(
+    redis_client: Redis,
+    raw_task: str,
+    reason: str,
+    task_type: str = "",
+    lesson_id: str = "",
+) -> None:
+    payload: dict[str, Any] = {
+        "raw_task": str(raw_task),
+        "reason": str(reason),
+        "task_type": str(task_type or ""),
+        "lesson_id": str(lesson_id or ""),
+        "failed_at": utcnow().isoformat(),
+    }
+
+    pipeline = redis_client.pipeline(transaction=True)
+    pipeline.lrem(LESSON_PROCESSING_QUEUE_NAME, 1, raw_task)
+    pipeline.lpush(
+        LESSON_DEAD_LETTER_QUEUE_NAME,
+        json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+    )
     pipeline.execute()
 
 

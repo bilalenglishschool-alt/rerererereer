@@ -22,6 +22,9 @@
   - `/lesson_finish`
   - `/lesson_send`
   - статусный переход `in_progress -> processing -> draft_ready -> sent`.
+- Invite-flow тесты (invalid/expired/used/idempotent).
+- Webhook privacy regression test (metadata-only logging).
+- Worker retry/dead-letter policy + базовые reliability counters.
 
 ## Критичные инварианты
 - Один `in_progress` lesson на tutor (partial unique index).
@@ -41,7 +44,7 @@
 - Базовый вход: `README.md`
 
 ## Следующий этап (рекомендуемо)
-1. Расширить тесты на invite-flow, webhook metadata logging и queue retry ветки.
-2. Добавить monitoring/metrics по queue latency и fail-rate.
+1. Добавить monitoring/alerting на `worker_errors_last_10m > 0`.
+2. Добавить queue latency/duration метрики (enqueue->start, processing time).
 3. Уточнить стратегию non-reset migrations для будущего прод-retention.
-4. Улучшить prompt/валидацию LLM-ответа и добавить retry-policy для провайдера.
+4. Улучшить prompt/валидацию LLM-ответа и retry-policy для LLM провайдера.

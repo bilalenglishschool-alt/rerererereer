@@ -53,6 +53,8 @@
 
 ## 5) Queue протокол
 Redis list `lesson_tasks`.
+In-flight list: `lesson_tasks:processing`.
+Dead-letter list: `lesson_tasks:dead`.
 
 Payload JSON:
 ```json
@@ -66,11 +68,22 @@ Payload JSON:
 Backward compatibility:
 - старый raw payload (`lesson_id` строкой) трактуется как `process_audio_lesson`.
 
-## 6) Безопасность
+Retry/failure policy:
+- transient failure -> requeue
+- max attempts reached -> dead-letter
+- unknown task_type -> dead-letter
+
+## 6) Reliability metrics
+- `lesson_metrics:tasks_processed_total`
+- `lesson_metrics:task_failures_total`
+- `lesson_metrics:worker_failures` (ZSET, для окна 10 минут)
+- endpoint `GET /metrics/worker`
+
+## 7) Безопасность
 - В webhook логах нет полного payload.
 - Логируется только минимум метаданных.
 - `backups/` не хранится в git.
 
-## 7) Операционные документы
+## 8) Операционные документы
 - `DEPLOY_RESET_DB.md` — прод rollout для сценария RESET DB.
 - `CURRENT_STATE.md` — актуальный operational snapshot.

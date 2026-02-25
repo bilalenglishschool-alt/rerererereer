@@ -93,9 +93,21 @@ docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
   - `/lesson_finish`
   - `/lesson_send`
 - Статус-переходы: `in_progress -> processing -> draft_ready -> sent`.
-- Worker task `generate_artifacts` обрабатывается и заполняет summary/homework (stub).
+- Worker task `generate_artifacts` обрабатывается и заполняет summary/difficulties/homework (LLM или fallback).
 
-## 7) Health
+## 7) Reliability status
+- Invite-flow тесты покрыты: invalid / expired / used / idempotent claim.
+- Webhook privacy-regression тест есть (лог только metadata).
+- Worker policy:
+  - transient failure -> requeue
+  - max attempts reached -> dead-letter (`lesson_tasks:dead`)
+  - unknown `task_type` -> dead-letter
+- Worker metrics endpoint:
+  - `GET /metrics/worker`
+  - fields: `tasks_processed_total`, `task_failures_total`, `worker_errors_last_10m`,
+    `queue_depth`, `processing_depth`, `dead_letter_depth`
+
+## 8) Health
 
 ```bash
 curl http://localhost:${HOST_PORT:-8000}/health
@@ -106,12 +118,13 @@ curl http://localhost:${HOST_PORT:-8000}/health
 {"status":"ok","postgres":true,"redis":true,"details":{}}
 ```
 
-## 8) Operational decision state
+## 9) Operational decision state
 Текущий rollout-подход: **RESET DB allowed** (только при явном подтверждении владельца данных).
 
 Production reset runbook:
 - `DEPLOY_RESET_DB.md`
 
-## 9) Known limitations / next priorities
-- Расширить автотесты на invite-flow, webhook и retry-ветки очереди.
+## 10) Known limitations / next priorities
+- Добавить внешний alert (Prometheus/Grafana/Alertmanager) на `worker_errors_last_10m`.
+- Добавить метрики queue latency / processing duration.
 - При необходимости data retention: подготовить non-reset migration plan.

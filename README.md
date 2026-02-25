@@ -120,3 +120,19 @@ docker compose logs -f bot
 ```bash
 docker compose exec backend python -m unittest discover -s tutor_assistant/tests -p 'test_*.py' -v
 ```
+
+Покрытые блоки:
+- lesson lifecycle (text flow)
+- invite-flow (invalid/expired/used/idempotent)
+- webhook logging privacy regression
+- worker retry policy (requeue/dead-letter)
+
+## Reliability & Observability
+
+- Worker counters в Redis:
+  - `lesson_metrics:tasks_processed_total`
+  - `lesson_metrics:task_failures_total`
+- Failure events (last-10m check): `lesson_metrics:worker_failures` (sorted set)
+- Dead-letter queue: `lesson_tasks:dead`
+- HTTP endpoint:
+  - `GET /metrics/worker`

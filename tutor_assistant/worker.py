@@ -14,8 +14,12 @@ from .models import Artifact, Lesson, LessonChunk
 from .queue import (
     TASK_GENERATE_ARTIFACTS,
     TASK_PROCESS_AUDIO,
+    WORKER_FAILURE_EVENTS_ZSET_KEY,
+    WORKER_METRIC_TASKS_FAILED_KEY,
+    WORKER_METRIC_TASKS_PROCESSED_KEY,
     ack_task,
     acquire_lesson_lock,
+    dead_letter_task,
     get_redis_client,
     parse_task,
     release_lesson_lock,
@@ -31,6 +35,58 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 MAX_ATTEMPTS = 3
+
+
+def record_task_processed(redis_client, task_type: str) -> None:
+    try:
+        redis_client.incr(WORKER_METRIC_TASKS_PROCESSED_KEY)
+        redis_client.incr(f"{WORKER_METRIC_TASKS_PROCESSED_KEY}:{task_type}")
+    except Exception:  # noqa: BLE001
+        logger.debug("Failed to increment processed task metrics", exc_info=True)
+
+
+def record_task_failure(redis_client, task_type: str, lesson_id: str, reason: str) -> None:
+    try:
+        now_ts = int(time.time())
+        event_member = f"{now_ts}:{task_type}:{lesson_id}:{reason[:80]}"
+
+        pipeline = redis_client.pipeline(transaction=True)
+        pipeline.incr(WORKER_METRIC_TASKS_FAILED_KEY)
+        pipeline.incr(f"{WORKER_METRIC_TASKS_FAILED_KEY}:{task_type}")
+        pipeline.zadd(WORKER_FAILURE_EVENTS_ZSET_KEY, {event_member: now_ts})
+        pipeline.zremrangebyscore(WORKER_FAILURE_EVENTS_ZSET_KEY, 0, now_ts - 86400)
+        pipeline.execute()
+    except Exception:  # noqa: BLE001
+        logger.debug("Failed to increment failure task metrics", exc_info=True)
+
+
+def handle_task_failure(redis_client, raw_task: str, lesson_id: str, task_type: str, exc: Exception) -> str:
+    attempts = 0
+    with SessionLocal() as db:
+        lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
+        if lesson:
+            attempts = lesson.processing_attempts or 0
+            lesson.processing_status = "failed"
+            lesson.processing_error = str(exc)
+            db.commit()
+
+    reason = str(exc)
+    record_task_failure(redis_client, task_type=task_type, lesson_id=lesson_id, reason=reason)
+
+    if attempts >= MAX_ATTEMPTS:
+        logger.error("Lesson %s reached max attempts, dead-lettering task", lesson_id)
+        dead_letter_task(
+            redis_client,
+            raw_task=raw_task,
+            reason=f"max attempts reached: {reason}",
+            task_type=task_type,
+            lesson_id=lesson_id,
+        )
+        return "dead_letter"
+
+    time.sleep(1)
+    requeue_task(redis_client, raw_task)
+    return "requeued"
 
 
 def upsert_artifact(
@@ -276,8 +332,16 @@ def main() -> None:
             ack_task(redis_client, raw_task)
             continue
         if task_type not in {TASK_GENERATE_ARTIFACTS, TASK_PROCESS_AUDIO}:
-            logger.error("Unknown task_type=%s for lesson %s, dropping task", task_type, lesson_id)
-            ack_task(redis_client, raw_task)
+            reason = f"Unknown task_type={task_type}"
+            logger.error("%s for lesson %s, dead-lettering task", reason, lesson_id)
+            record_task_failure(redis_client, task_type=task_type, lesson_id=lesson_id, reason=reason)
+            dead_letter_task(
+                redis_client,
+                raw_task=raw_task,
+                reason=reason,
+                task_type=task_type,
+                lesson_id=lesson_id,
+            )
             continue
 
         lock_acquired = acquire_lesson_lock(redis_client, lesson_id=lesson_id)
@@ -293,23 +357,17 @@ def main() -> None:
             else:
                 process_audio_lesson(lesson_id)
             ack_task(redis_client, raw_task)
+            record_task_processed(redis_client, task_type=task_type)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Worker failed for lesson %s", lesson_id)
-            attempts = 0
-            with SessionLocal() as db:
-                lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
-                if lesson:
-                    attempts = lesson.processing_attempts or 0
-                    lesson.processing_status = "failed"
-                    lesson.processing_error = str(exc)
-                    db.commit()
-
-            if attempts >= MAX_ATTEMPTS:
-                logger.error("Lesson %s reached max attempts, acking task", lesson_id)
-                ack_task(redis_client, raw_task)
-            else:
-                time.sleep(1)
-                requeue_task(redis_client, raw_task)
+            result = handle_task_failure(
+                redis_client=redis_client,
+                raw_task=raw_task,
+                lesson_id=lesson_id,
+                task_type=task_type,
+                exc=exc,
+            )
+            logger.info("Lesson %s failure policy applied: %s", lesson_id, result)
         finally:
             release_lesson_lock(redis_client, lesson_id=lesson_id)
 

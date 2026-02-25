@@ -26,6 +26,7 @@ from tutor_assistant.queue import (
     WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY,
     WORKER_METRIC_TASKS_FAILED_KEY,
     WORKER_METRIC_TASKS_PROCESSED_KEY,
+    build_task_payload,
 )
 
 
@@ -37,6 +38,7 @@ class _MetricsRedisStub:
         queue_depth: int = 0,
         processing_depth: int = 0,
         dead_letter_depth: int = 0,
+        queue_items: dict[str, list[str]] | None = None,
     ) -> None:
         self._values = values or {}
         self._depths = {
@@ -44,6 +46,7 @@ class _MetricsRedisStub:
             LESSON_PROCESSING_QUEUE_NAME: processing_depth,
             LESSON_DEAD_LETTER_QUEUE_NAME: dead_letter_depth,
         }
+        self._queue_items = queue_items or {}
         self.closed = False
 
     def get(self, key: str):
@@ -54,6 +57,9 @@ class _MetricsRedisStub:
 
     def llen(self, key: str):
         return self._depths.get(key, 0)
+
+    def lrange(self, key: str, start: int, end: int):  # noqa: ARG002
+        return list(self._queue_items.get(key, []))
 
     def close(self) -> None:
         self.closed = True
@@ -109,6 +115,17 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
             queue_depth=4,
             processing_depth=1,
             dead_letter_depth=0,
+            queue_items={
+                LESSON_QUEUE_NAME: [
+                    build_task_payload("lesson-1", TASK_TRANSCRIBE_JOB),
+                    build_task_payload("lesson-2", TASK_GENERATE_ARTIFACTS),
+                    build_task_payload("lesson-3", TASK_PROCESS_AUDIO),
+                    "legacy-lesson-4",
+                ],
+                LESSON_PROCESSING_QUEUE_NAME: [
+                    build_task_payload("lesson-5", TASK_TRANSCRIBE_JOB),
+                ],
+            },
         )
 
         with patch("tutor_assistant.backend.time.time", return_value=2000):
@@ -132,6 +149,8 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["processing_duration_ms_avg"], 150.5)
         self.assertEqual(payload["worker_heartbeat_ts"], 1995)
         self.assertEqual(payload["worker_heartbeat_age_seconds"], 5)
+        self.assertEqual(payload["transcribe_queue_depth"], 1)
+        self.assertEqual(payload["transcribe_processing_depth"], 1)
         self.assertEqual(
             payload["queue_latency_ms_last_by_type"],
             {
@@ -189,6 +208,22 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
             },
         )
         self.assertEqual(
+            payload["queue_depth_by_type"],
+            {
+                TASK_PROCESS_AUDIO: 2,
+                TASK_GENERATE_ARTIFACTS: 1,
+                TASK_TRANSCRIBE_JOB: 1,
+            },
+        )
+        self.assertEqual(
+            payload["processing_depth_by_type"],
+            {
+                TASK_PROCESS_AUDIO: 0,
+                TASK_GENERATE_ARTIFACTS: 0,
+                TASK_TRANSCRIBE_JOB: 1,
+            },
+        )
+        self.assertEqual(
             payload["task_failures_by_type"],
             {
                 TASK_PROCESS_AUDIO: 1,
@@ -216,6 +251,8 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["queue_latency_ms_avg"], 0.0)
         self.assertEqual(payload["processing_duration_ms_avg"], 0.0)
         self.assertEqual(payload["worker_heartbeat_age_seconds"], -1)
+        self.assertEqual(payload["transcribe_queue_depth"], 0)
+        self.assertEqual(payload["transcribe_processing_depth"], 0)
         self.assertEqual(
             payload["queue_latency_ms_avg_by_type"],
             {
@@ -291,6 +328,17 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
             queue_depth=4,
             processing_depth=1,
             dead_letter_depth=0,
+            queue_items={
+                LESSON_QUEUE_NAME: [
+                    build_task_payload("lesson-1", TASK_TRANSCRIBE_JOB),
+                    build_task_payload("lesson-2", TASK_GENERATE_ARTIFACTS),
+                    build_task_payload("lesson-3", TASK_PROCESS_AUDIO),
+                    "legacy-lesson-4",
+                ],
+                LESSON_PROCESSING_QUEUE_NAME: [
+                    build_task_payload("lesson-5", TASK_TRANSCRIBE_JOB),
+                ],
+            },
         )
         with patch("tutor_assistant.backend.time.time", return_value=2000):
             with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
@@ -310,6 +358,14 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         )
         self.assertIn(
             "tutor_assistant_worker_queue_depth 4",
+            body,
+        )
+        self.assertIn(
+            "tutor_assistant_worker_transcribe_queue_depth 1",
+            body,
+        )
+        self.assertIn(
+            "tutor_assistant_worker_transcribe_processing_depth 1",
             body,
         )
         self.assertIn(
@@ -366,6 +422,14 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         )
         self.assertIn(
             f'tutor_assistant_worker_processing_duration_ms_avg_by_type{{task_type="{TASK_TRANSCRIBE_JOB}"}} 300.0',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_queue_depth_by_type{{task_type="{TASK_PROCESS_AUDIO}"}} 2',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_processing_depth_by_type{{task_type="{TASK_TRANSCRIBE_JOB}"}} 1',
             body,
         )
         self.assertTrue(redis_stub.closed)

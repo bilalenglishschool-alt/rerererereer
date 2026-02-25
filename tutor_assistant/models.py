@@ -101,6 +101,14 @@ class Invite(Base):
 
 class Lesson(Base):
     __tablename__ = "lessons"
+    __table_args__ = (
+        Index(
+            "ux_lessons_one_in_progress_per_tutor",
+            "tutor_id",
+            unique=True,
+            postgresql_where=text("status = 'in_progress'"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     tutor_id: Mapped[UUID] = mapped_column(
@@ -123,6 +131,7 @@ class Lesson(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     transcript_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     draft_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -146,8 +155,9 @@ class LessonChunk(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     lesson_id: Mapped[str] = mapped_column(ForeignKey("lessons.id"), index=True, nullable=False)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
-    path: Mapped[str] = mapped_column(String(1024), nullable=False)
-    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     lesson: Mapped[Lesson] = relationship("Lesson", back_populates="chunks")
@@ -159,7 +169,8 @@ class Artifact(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     lesson_id: Mapped[str] = mapped_column(ForeignKey("lessons.id"), index=True, nullable=False)
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
-    path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     lesson: Mapped[Lesson] = relationship("Lesson", back_populates="artifacts")

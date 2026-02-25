@@ -64,30 +64,77 @@ def transcribe_audio(
     return transcript or TRANSCRIPTION_FAILED_TEXT
 
 
+def _as_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return ""
+
+
+def _as_text_lines(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        lines: list[str] = []
+        for item in value:
+            text = _as_text(item)
+            if text:
+                lines.append(f"- {text}")
+        return "\n".join(lines).strip()
+    return ""
+
+
 def generate_draft(transcript: str, provider: str) -> dict[str, str]:
     provider = (provider or "none").lower()
     transcript = transcript.strip() or TRANSCRIPTION_FAILED_TEXT
     transcript_preview = transcript[:500]
-    transcript_line = f"Транскрипт (первые 500 символов): {transcript_preview}"
 
     if provider == "none":
         return {
             "summary": (
                 "Кратко: разобрали материал по теме урока.\n"
-                f"Источник: {transcript[:120]}\n"
-                f"{transcript_line}"
+                f"Источник: {transcript[:120]}"
             ),
-            "difficulties": "Пока заглушка: добавить реальные трудности после подключения LLM.",
+            "difficulties": "Пока заглушка: подключите LLM для реальных трудностей.",
             "homework": "Пока заглушка: повторить тему урока и решить 3 задачи по аналогии.",
         }
 
-    # Extension point for real LLM integration.
+    if provider == "openai":
+        try:
+            from .llm_client import generate_lesson_draft
+
+            raw = generate_lesson_draft(transcript)
+            summary = _as_text(raw.get("summary")) if isinstance(raw, dict) else ""
+            difficulties = _as_text_lines(raw.get("difficulties")) if isinstance(raw, dict) else ""
+            homework = _as_text_lines(raw.get("homework")) if isinstance(raw, dict) else ""
+
+            if summary:
+                return {
+                    "summary": summary,
+                    "difficulties": difficulties or "Не выделены отдельные трудности.",
+                    "homework": homework or "Домашка не указана моделью.",
+                }
+        except Exception:
+            pass
+
+        # Fallback если LLM недоступен/не настроен.
+        return {
+            "summary": (
+                "Авто-summary недоступен, использую fallback.\n"
+                f"Транскрипт (первые 500 символов): {transcript_preview}"
+            ),
+            "difficulties": "Не удалось получить сложности автоматически.",
+            "homework": "Повторить материал урока и прислать 3 примера по теме.",
+        }
+
+    # Unknown provider fallback.
     return {
-        "summary": (
-            f"Черновик summary (provider={provider}).\n"
-            f"Контекст: {transcript[:180]}\n"
-            f"{transcript_line}"
-        ),
-        "difficulties": "Черновик difficulties: подключить реальный провайдер LLM.",
-        "homework": "Черновик homework: подключить реальный провайдер LLM.",
+        "summary": f"Провайдер {provider} не поддерживается, fallback summary.\n{transcript_preview}",
+        "difficulties": "Провайдер LLM не поддерживается.",
+        "homework": "Повторить материал урока.",
     }

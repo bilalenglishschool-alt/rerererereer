@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import update
@@ -13,9 +12,16 @@ from .database import SessionLocal, init_db
 from .drafts import TRANSCRIPTION_FAILED_TEXT, generate_draft, transcribe_audio
 from .models import Artifact, Lesson, LessonChunk
 from .queue import (
+    TASK_GENERATE_ARTIFACTS,
+    TASK_PROCESS_AUDIO,
+    WORKER_FAILURE_EVENTS_ZSET_KEY,
+    WORKER_METRIC_TASKS_FAILED_KEY,
+    WORKER_METRIC_TASKS_PROCESSED_KEY,
     ack_task,
     acquire_lesson_lock,
+    dead_letter_task,
     get_redis_client,
+    parse_task,
     release_lesson_lock,
     requeue_task,
     reserve_task,
@@ -23,6 +29,7 @@ from .queue import (
 )
 from .storage import merge_chunks, write_transcript_file
 from .telegram_api import send_draft_to_tutor
+from .time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -30,7 +37,65 @@ settings = get_settings()
 MAX_ATTEMPTS = 3
 
 
-def upsert_artifact(db, lesson_id: str, kind: str, path: str) -> None:
+def record_task_processed(redis_client, task_type: str) -> None:
+    try:
+        redis_client.incr(WORKER_METRIC_TASKS_PROCESSED_KEY)
+        redis_client.incr(f"{WORKER_METRIC_TASKS_PROCESSED_KEY}:{task_type}")
+    except Exception:  # noqa: BLE001
+        logger.debug("Failed to increment processed task metrics", exc_info=True)
+
+
+def record_task_failure(redis_client, task_type: str, lesson_id: str, reason: str) -> None:
+    try:
+        now_ts = int(time.time())
+        event_member = f"{now_ts}:{task_type}:{lesson_id}:{reason[:80]}"
+
+        pipeline = redis_client.pipeline(transaction=True)
+        pipeline.incr(WORKER_METRIC_TASKS_FAILED_KEY)
+        pipeline.incr(f"{WORKER_METRIC_TASKS_FAILED_KEY}:{task_type}")
+        pipeline.zadd(WORKER_FAILURE_EVENTS_ZSET_KEY, {event_member: now_ts})
+        pipeline.zremrangebyscore(WORKER_FAILURE_EVENTS_ZSET_KEY, 0, now_ts - 86400)
+        pipeline.execute()
+    except Exception:  # noqa: BLE001
+        logger.debug("Failed to increment failure task metrics", exc_info=True)
+
+
+def handle_task_failure(redis_client, raw_task: str, lesson_id: str, task_type: str, exc: Exception) -> str:
+    attempts = 0
+    with SessionLocal() as db:
+        lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
+        if lesson:
+            attempts = lesson.processing_attempts or 0
+            lesson.processing_status = "failed"
+            lesson.processing_error = str(exc)
+            db.commit()
+
+    reason = str(exc)
+    record_task_failure(redis_client, task_type=task_type, lesson_id=lesson_id, reason=reason)
+
+    if attempts >= MAX_ATTEMPTS:
+        logger.error("Lesson %s reached max attempts, dead-lettering task", lesson_id)
+        dead_letter_task(
+            redis_client,
+            raw_task=raw_task,
+            reason=f"max attempts reached: {reason}",
+            task_type=task_type,
+            lesson_id=lesson_id,
+        )
+        return "dead_letter"
+
+    time.sleep(1)
+    requeue_task(redis_client, raw_task)
+    return "requeued"
+
+
+def upsert_artifact(
+    db,
+    lesson_id: str,
+    kind: str,
+    path: str | None = None,
+    content: str | None = None,
+) -> None:
     artifact = (
         db.query(Artifact)
         .filter(Artifact.lesson_id == lesson_id, Artifact.kind == kind)
@@ -38,12 +103,20 @@ def upsert_artifact(db, lesson_id: str, kind: str, path: str) -> None:
     )
     if artifact:
         artifact.path = path
+        artifact.content = content
         return
 
-    db.add(Artifact(lesson_id=lesson_id, kind=kind, path=path))
+    db.add(
+        Artifact(
+            lesson_id=lesson_id,
+            kind=kind,
+            path=path,
+            content=content,
+        )
+    )
 
 
-def process_lesson(lesson_id: str) -> None:
+def process_audio_lesson(lesson_id: str) -> None:
     with SessionLocal() as db:
         lesson = (
             db.query(Lesson)
@@ -72,7 +145,10 @@ def process_lesson(lesson_id: str) -> None:
 
         chunks = (
             db.query(LessonChunk)
-            .filter(LessonChunk.lesson_id == lesson.id)
+            .filter(
+                LessonChunk.lesson_id == lesson.id,
+                LessonChunk.path.isnot(None),
+            )
             .order_by(LessonChunk.seq.asc())
             .all()
         )
@@ -111,7 +187,7 @@ def process_lesson(lesson_id: str) -> None:
         lesson.draft_summary = draft["summary"]
         lesson.draft_difficulties = draft["difficulties"]
         lesson.draft_homework = draft["homework"]
-        lesson.processed_at = datetime.utcnow()
+        lesson.processed_at = utcnow()
         lesson.processing_status = "done"
         lesson.processing_error = (
             f"Transcription failed: {transcript_error}" if transcript_error else None
@@ -160,6 +236,83 @@ def process_lesson(lesson_id: str) -> None:
                     db.commit()
 
 
+def process_generate_artifacts(lesson_id: str) -> None:
+    with SessionLocal() as db:
+        lesson = (
+            db.query(Lesson)
+            .filter(Lesson.id == lesson_id)
+            .with_for_update()
+            .first()
+        )
+        if not lesson:
+            logger.warning("Lesson %s was not found", lesson_id)
+            return
+
+        if lesson.status == "sent":
+            logger.info("Lesson %s already sent, skipping", lesson_id)
+            return
+
+        if lesson.status == "draft_ready":
+            logger.info("Lesson %s already has draft_ready status, skipping", lesson_id)
+            return
+
+        if lesson.status != "processing":
+            raise RuntimeError(
+                f"Lesson {lesson.id} has invalid status for generate_artifacts: {lesson.status}"
+            )
+
+        lesson.processing_status = "processing"
+        lesson.processing_attempts = (lesson.processing_attempts or 0) + 1
+        lesson.processing_error = None
+        db.commit()
+
+    with SessionLocal() as db:
+        lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
+        if not lesson:
+            logger.warning("Lesson %s disappeared during generate_artifacts", lesson_id)
+            return
+
+        chunks = (
+            db.query(LessonChunk)
+            .filter(LessonChunk.lesson_id == lesson.id)
+            .order_by(LessonChunk.seq.asc())
+            .all()
+        )
+        chunk_texts = [
+            (chunk.content or "").strip()
+            for chunk in chunks
+            if (chunk.content or "").strip()
+        ]
+        if not chunk_texts:
+            lesson.processing_status = "failed"
+            lesson.processing_error = "No text chunks uploaded"
+            db.commit()
+            raise RuntimeError(f"No text chunks uploaded for lesson {lesson.id}")
+
+        transcript = "\n".join(chunk_texts)
+        draft = generate_draft(transcript, settings.llm_provider)
+        summary = (draft.get("summary") or "").strip()
+        difficulties = (draft.get("difficulties") or "").strip()
+        homework = (draft.get("homework") or "").strip()
+
+        if not summary:
+            summary = transcript
+
+        lesson.transcript_text = transcript
+        lesson.draft_summary = summary
+        lesson.draft_difficulties = difficulties
+        lesson.draft_homework = homework
+        lesson.status = "draft_ready"
+        lesson.processed_at = utcnow()
+        lesson.processing_status = "done"
+        lesson.processing_error = None
+
+        upsert_artifact(db, lesson.id, "summary", content=summary)
+        upsert_artifact(db, lesson.id, "difficulties", content=difficulties)
+        upsert_artifact(db, lesson.id, "homework", content=homework)
+        db.commit()
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     init_db()
@@ -174,9 +327,21 @@ def main() -> None:
         if not raw_task:
             continue
 
-        lesson_id = str(raw_task).strip()
+        task_type, lesson_id = parse_task(raw_task)
         if not lesson_id:
             ack_task(redis_client, raw_task)
+            continue
+        if task_type not in {TASK_GENERATE_ARTIFACTS, TASK_PROCESS_AUDIO}:
+            reason = f"Unknown task_type={task_type}"
+            logger.error("%s for lesson %s, dead-lettering task", reason, lesson_id)
+            record_task_failure(redis_client, task_type=task_type, lesson_id=lesson_id, reason=reason)
+            dead_letter_task(
+                redis_client,
+                raw_task=raw_task,
+                reason=reason,
+                task_type=task_type,
+                lesson_id=lesson_id,
+            )
             continue
 
         lock_acquired = acquire_lesson_lock(redis_client, lesson_id=lesson_id)
@@ -187,25 +352,22 @@ def main() -> None:
             continue
 
         try:
-            process_lesson(lesson_id)
+            if task_type == TASK_GENERATE_ARTIFACTS:
+                process_generate_artifacts(lesson_id)
+            else:
+                process_audio_lesson(lesson_id)
             ack_task(redis_client, raw_task)
+            record_task_processed(redis_client, task_type=task_type)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Worker failed for lesson %s", lesson_id)
-            attempts = 0
-            with SessionLocal() as db:
-                lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
-                if lesson:
-                    attempts = lesson.processing_attempts or 0
-                    lesson.processing_status = "failed"
-                    lesson.processing_error = str(exc)
-                    db.commit()
-
-            if attempts >= MAX_ATTEMPTS:
-                logger.error("Lesson %s reached max attempts, acking task", lesson_id)
-                ack_task(redis_client, raw_task)
-            else:
-                time.sleep(1)
-                requeue_task(redis_client, raw_task)
+            result = handle_task_failure(
+                redis_client=redis_client,
+                raw_task=raw_task,
+                lesson_id=lesson_id,
+                task_type=task_type,
+                exc=exc,
+            )
+            logger.info("Lesson %s failure policy applied: %s", lesson_id, result)
         finally:
             release_lesson_lock(redis_client, lesson_id=lesson_id)
 

@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
+from .time_utils import utcnow
 
 
 class Tutor(Base):
@@ -17,7 +18,7 @@ class Tutor(Base):
     tg_user_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True, nullable=False)
     tg_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
     student_links: Mapped[list[TutorStudent]] = relationship(
         "TutorStudent",
@@ -43,7 +44,7 @@ class Student(Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     tg_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     tg_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
     tutor_links: Mapped[list[TutorStudent]] = relationship(
         "TutorStudent",
@@ -68,7 +69,7 @@ class TutorStudent(Base):
         primary_key=True,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
     tutor: Mapped[Tutor] = relationship("Tutor", back_populates="student_links")
     student: Mapped[Student] = relationship("Student", back_populates="tutor_links")
@@ -93,7 +94,7 @@ class Invite(Base):
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
     tutor: Mapped[Tutor] = relationship("Tutor", back_populates="invites")
     student: Mapped[Student | None] = relationship("Student", back_populates="invites")
@@ -101,6 +102,14 @@ class Invite(Base):
 
 class Lesson(Base):
     __tablename__ = "lessons"
+    __table_args__ = (
+        Index(
+            "ux_lessons_one_in_progress_per_tutor",
+            "tutor_id",
+            unique=True,
+            postgresql_where=text("status = 'in_progress'"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     tutor_id: Mapped[UUID] = mapped_column(
@@ -120,9 +129,10 @@ class Lesson(Base):
     processing_status: Mapped[str] = mapped_column(String(32), default="pending", nullable=False)
     processing_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     transcript_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     draft_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -131,7 +141,7 @@ class Lesson(Base):
     draft_sent_to_tutor: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     sent_to_student: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
     tutor: Mapped[Tutor] = relationship("Tutor", back_populates="lessons")
     student: Mapped[Student] = relationship("Student", back_populates="lessons")
@@ -146,9 +156,10 @@ class LessonChunk(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     lesson_id: Mapped[str] = mapped_column(ForeignKey("lessons.id"), index=True, nullable=False)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
-    path: Mapped[str] = mapped_column(String(1024), nullable=False)
-    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
     lesson: Mapped[Lesson] = relationship("Lesson", back_populates="chunks")
 
@@ -159,7 +170,8 @@ class Artifact(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     lesson_id: Mapped[str] = mapped_column(ForeignKey("lessons.id"), index=True, nullable=False)
     kind: Mapped[str] = mapped_column(String(64), nullable=False)
-    path: Mapped[str] = mapped_column(String(1024), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, nullable=False)
 
     lesson: Mapped[Lesson] = relationship("Lesson", back_populates="artifacts")

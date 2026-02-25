@@ -9,12 +9,15 @@ from uuid import UUID, uuid4
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update, User
+from redis.exceptions import RedisError
 from sqlalchemy import update
+from sqlalchemy.exc import IntegrityError
 
 from .config import get_settings
 from .database import SessionLocal, init_db
 from .drafts import generate_draft
-from .models import Invite, Lesson, Student, Tutor, TutorStudent
+from .models import Invite, Lesson, LessonChunk, Student, Tutor, TutorStudent
+from .queue import TASK_GENERATE_ARTIFACTS, enqueue_process_lesson, get_redis_client
 from .telegram_texts import (
     EDIT_DRAFT_PREFIX,
     REGEN_DRAFT_PREFIX,
@@ -28,6 +31,7 @@ settings = get_settings()
 
 LESSON_PICK_PREFIX = "lesson_pick:"
 pending_edits: dict[int, str] = {}
+TEXT_LESSON_ACTIVE_STATUSES = {"in_progress", "processing", "draft_ready"}
 
 
 def ensure_tutor(db, tg_user_id: int, tg_username: str | None, full_name: str | None) -> Tutor:
@@ -99,6 +103,66 @@ def create_lesson(db, tutor: Tutor, student: Student) -> Lesson:
     db.commit()
     db.refresh(lesson)
     return lesson
+
+
+def create_text_lesson(db, tutor: Tutor, student: Student) -> Lesson:
+    lesson = Lesson(
+        id=str(uuid4()),
+        tutor_id=tutor.id,
+        student_id=student.id,
+        token=secrets.token_urlsafe(24),
+        status="in_progress",
+        started_at=datetime.utcnow(),
+        sent_to_student=False,
+    )
+    db.add(lesson)
+    db.commit()
+    db.refresh(lesson)
+    return lesson
+
+
+def get_active_text_lesson(db, tutor_id: UUID) -> Lesson | None:
+    return (
+        db.query(Lesson)
+        .filter(
+            Lesson.tutor_id == tutor_id,
+            Lesson.status.in_(TEXT_LESSON_ACTIVE_STATUSES),
+        )
+        .order_by(Lesson.created_at.desc())
+        .first()
+    )
+
+
+def get_in_progress_text_lesson(db, tutor_id: UUID) -> Lesson | None:
+    return (
+        db.query(Lesson)
+        .filter(
+            Lesson.tutor_id == tutor_id,
+            Lesson.status == "in_progress",
+        )
+        .order_by(Lesson.created_at.desc())
+        .first()
+    )
+
+
+def get_next_chunk_seq(db, lesson_id: str) -> int:
+    last = (
+        db.query(LessonChunk)
+        .filter(LessonChunk.lesson_id == lesson_id)
+        .order_by(LessonChunk.seq.desc())
+        .first()
+    )
+    if not last:
+        return 0
+    return int(last.seq) + 1
+
+
+def enqueue_generate_artifacts_task(lesson_id: str) -> None:
+    redis_client = get_redis_client(settings)
+    try:
+        enqueue_process_lesson(redis_client, lesson_id=lesson_id, task_type=TASK_GENERATE_ARTIFACTS)
+    finally:
+        redis_client.close()
 
 
 def parse_draft_edit(text: str) -> dict[str, str] | None:
@@ -292,7 +356,11 @@ def build_dispatcher() -> Dispatcher:
             "Команды:\n"
             "/add_student <имя> | <@username или telegram_id>\n"
             "/lesson_now [student_uuid]\n"
-            "/create_invite [student_uuid]"
+            "/create_invite [student_uuid]\n"
+            "/lesson_start <student_uuid>\n"
+            "/lesson_add <текст>\n"
+            "/lesson_finish\n"
+            "/lesson_send"
         )
 
     @dp.message(Command("add_student"))
@@ -401,6 +469,254 @@ def build_dispatcher() -> Dispatcher:
             "Передайте ученику команду:\n"
             f"/start invite_{invite.token}"
         )
+
+    @dp.message(Command("lesson_start"))
+    async def handle_lesson_start(message: Message) -> None:
+        user = require_message_user(message)
+        payload = (message.text or "").split(maxsplit=1)
+        if len(payload) < 2 or not payload[1].strip():
+            await message.answer("Использование: /lesson_start <student_uuid>")
+            return
+
+        try:
+            student_id = parse_uuid(payload[1].strip())
+        except ValueError:
+            await message.answer("student_uuid должен быть в формате UUID.")
+            return
+
+        with SessionLocal() as db:
+            tutor = ensure_tutor(
+                db,
+                tg_user_id=user.id,
+                tg_username=user.username,
+                full_name=user.full_name,
+            )
+            student = (
+                db.query(Student)
+                .join(TutorStudent, TutorStudent.student_id == Student.id)
+                .filter(
+                    Student.id == student_id,
+                    TutorStudent.tutor_id == tutor.id,
+                    TutorStudent.is_active.is_(True),
+                )
+                .first()
+            )
+            if not student:
+                await message.answer("Этот student_uuid не привязан к вам.")
+                return
+
+            active_lesson = get_active_text_lesson(db, tutor.id)
+            if active_lesson:
+                await message.answer(
+                    "У вас уже есть активный урок.\n"
+                    f"ID: {active_lesson.id}\n"
+                    f"Статус: {active_lesson.status}"
+                )
+                return
+
+            try:
+                lesson = create_text_lesson(db, tutor=tutor, student=student)
+            except IntegrityError:
+                db.rollback()
+                active_lesson = get_active_text_lesson(db, tutor.id)
+                if active_lesson:
+                    await message.answer(
+                        "У вас уже есть активный урок.\n"
+                        f"ID: {active_lesson.id}\n"
+                        f"Статус: {active_lesson.status}"
+                    )
+                    return
+                raise
+
+        await message.answer(
+            "Lesson started.\n"
+            f"ID урока: {lesson.id}\n"
+            "Добавляйте заметки: /lesson_add <текст>"
+        )
+
+    @dp.message(Command("lesson_add"))
+    async def handle_lesson_add(message: Message) -> None:
+        user = require_message_user(message)
+        payload = (message.text or "").split(maxsplit=1)
+        if len(payload) < 2 or not payload[1].strip():
+            await message.answer("Использование: /lesson_add <текст>")
+            return
+
+        chunk_text = payload[1].strip()
+
+        with SessionLocal() as db:
+            tutor = ensure_tutor(
+                db,
+                tg_user_id=user.id,
+                tg_username=user.username,
+                full_name=user.full_name,
+            )
+            lesson = get_in_progress_text_lesson(db, tutor.id)
+            if not lesson:
+                await message.answer("Нет активного урока. Сначала выполните /lesson_start <student_uuid>.")
+                return
+
+            seq = get_next_chunk_seq(db, lesson.id)
+            db.add(
+                LessonChunk(
+                    lesson_id=lesson.id,
+                    seq=seq,
+                    content=chunk_text,
+                )
+            )
+            db.commit()
+
+        await message.answer(f"Фрагмент сохранен (#{seq + 1}).")
+
+    @dp.message(Command("lesson_finish"))
+    async def handle_lesson_finish_cmd(message: Message) -> None:
+        user = require_message_user(message)
+        lesson_id: str | None = None
+
+        with SessionLocal() as db:
+            tutor = ensure_tutor(
+                db,
+                tg_user_id=user.id,
+                tg_username=user.username,
+                full_name=user.full_name,
+            )
+            lesson = get_in_progress_text_lesson(db, tutor.id)
+            if not lesson:
+                active_lesson = get_active_text_lesson(db, tutor.id)
+                if active_lesson:
+                    await message.answer(
+                        "Текущий урок уже не в статусе in_progress.\n"
+                        f"ID: {active_lesson.id}, статус: {active_lesson.status}"
+                    )
+                else:
+                    await message.answer("Нет активного урока для завершения.")
+                return
+
+            chunk_count = (
+                db.query(LessonChunk)
+                .filter(
+                    LessonChunk.lesson_id == lesson.id,
+                    LessonChunk.content.isnot(None),
+                )
+                .count()
+            )
+            if chunk_count == 0:
+                await message.answer("Нельзя завершить урок без /lesson_add.")
+                return
+
+            lesson.status = "processing"
+            lesson.finished_at = datetime.utcnow()
+            lesson.processing_status = "queued"
+            lesson.processing_error = None
+            lesson.processed_at = None
+            lesson_id = lesson.id
+            db.commit()
+
+        try:
+            enqueue_generate_artifacts_task(lesson_id)
+        except RedisError as exc:
+            with SessionLocal() as db:
+                lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
+                if lesson and lesson.status == "processing":
+                    lesson.status = "in_progress"
+                    lesson.processing_status = "failed"
+                    lesson.processing_error = f"Failed to enqueue task: {exc}"
+                    db.commit()
+            await message.answer("Очередь недоступна, попробуйте еще раз через минуту.")
+            return
+        except Exception as exc:  # noqa: BLE001
+            with SessionLocal() as db:
+                lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
+                if lesson and lesson.status == "processing":
+                    lesson.status = "in_progress"
+                    lesson.processing_status = "failed"
+                    lesson.processing_error = f"Failed to enqueue task: {exc}"
+                    db.commit()
+            await message.answer("Не удалось поставить задачу в очередь. Попробуйте позже.")
+            return
+
+        await message.answer("Lesson sent for processing.")
+
+    @dp.message(Command("lesson_send"))
+    async def handle_lesson_send_cmd(message: Message, bot: Bot) -> None:
+        user = require_message_user(message)
+
+        with SessionLocal() as db:
+            tutor = ensure_tutor(
+                db,
+                tg_user_id=user.id,
+                tg_username=user.username,
+                full_name=user.full_name,
+            )
+            lesson = (
+                db.query(Lesson)
+                .filter(
+                    Lesson.tutor_id == tutor.id,
+                    Lesson.status == "draft_ready",
+                    Lesson.sent_to_student.is_(False),
+                )
+                .order_by(Lesson.processed_at.desc(), Lesson.created_at.desc())
+                .first()
+            )
+            if not lesson:
+                active_lesson = get_active_text_lesson(db, tutor.id)
+                if active_lesson and active_lesson.status == "processing":
+                    await message.answer("Урок еще обрабатывается. Дождитесь статуса draft_ready.")
+                else:
+                    await message.answer("Нет урока в статусе draft_ready для отправки.")
+                return
+
+            student = lesson.student
+            if not student:
+                await message.answer("Ученик не найден.")
+                return
+
+            target_chat: int | str | None = None
+            if student.tg_user_id:
+                target_chat = student.tg_user_id
+            elif student.tg_username:
+                target_chat = f"@{student.tg_username}"
+
+            if target_chat is None:
+                await message.answer("У ученика нет telegram username/ID.")
+                return
+
+            lesson_id = lesson.id
+            student_text = build_student_text(
+                student_name=student.name,
+                summary=lesson.draft_summary or "",
+                difficulties=lesson.draft_difficulties or "Без замечаний.",
+                homework=lesson.draft_homework or "",
+            )
+
+        try:
+            await bot.send_message(chat_id=target_chat, text=student_text)
+        except Exception:  # noqa: BLE001
+            logger.exception("Failed to send lesson %s from /lesson_send", lesson_id)
+            await message.answer("Не удалось отправить ученику. Проверьте username/ID и права бота.")
+            return
+
+        with SessionLocal() as db:
+            updated = db.execute(
+                update(Lesson)
+                .where(
+                    Lesson.id == lesson_id,
+                    Lesson.status == "draft_ready",
+                    Lesson.sent_to_student.is_(False),
+                )
+                .values(
+                    status="sent",
+                    sent_to_student=True,
+                    sent_at=datetime.utcnow(),
+                )
+            )
+            db.commit()
+
+        if (updated.rowcount or 0) == 0:
+            await message.answer("Урок уже отправлен ранее.")
+            return
+
+        await message.answer("Итоги урока отправлены ученику.")
 
     async def send_lesson_link(tutor_user_id: int, student_id: UUID, bot: Bot) -> None:
         with SessionLocal() as db:
@@ -538,7 +854,11 @@ def build_dispatcher() -> Dispatcher:
             updated = db.execute(
                 update(Lesson)
                 .where(Lesson.id == lesson.id, Lesson.sent_to_student.is_(False))
-                .values(sent_to_student=True)
+                .values(
+                    status="sent",
+                    sent_to_student=True,
+                    sent_at=datetime.utcnow(),
+                )
             )
             db.commit()
 

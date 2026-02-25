@@ -2,16 +2,17 @@
 
 Docker Compose проект с сервисами:
 - `backend` (FastAPI + Telegram webhook)
-- `bot` (Telegram polling, опционально для локальной разработки)
+- `bot` (Telegram polling, для локальной отладки)
 - `worker` (очередь обработки уроков)
 - `postgres`
 - `redis`
 
-## Что изменено
-- База данных: Postgres через `DATABASE_URL` (единый источник правды для backend/bot/worker).
-- `finish` в backend только ставит задачу в Redis, тяжёлая обработка выполняется в `worker`.
-- Транскрибация: локальный `faster-whisper` на CPU.
-- Идемпотентность: повторные задачи не дублируют результат; отправка ученику остаётся одноразовой.
+## Текущий архитектурный статус
+- Schema truth: Alembic migrations only (runtime без `create_all()`).
+- Канон ownership: `tutors` ↔ `students` через `tutor_student`.
+- Invite onboarding работает через `/start invite_<token>`.
+- Worker и backend разделены, связь через Redis queue.
+- PII-safe webhook logging: логируются только `update_id`, `event_type`, `from_user_id`.
 
 ## Переменные окружения (.env)
 - `BOT_TOKEN`
@@ -37,10 +38,6 @@ docker compose up -d --build
 docker compose exec backend alembic -c /app/alembic.ini upgrade head
 ```
 
-Runbooks:
-- reset deploy: `DEPLOY_RESET_DB.md`
-- state snapshot: `CURRENT_STATE.md`
-
 ## Проверка
 
 ```bash
@@ -61,10 +58,32 @@ curl http://localhost:${HOST_PORT:-8000}/health
 - `/start`
 - `/start invite_<token>`
 - `/add_student <имя> | <@username или telegram_id>`
-- `/lesson_now [student_uuid]`
 - `/create_invite [student_uuid]`
+- `/lesson_now [student_uuid]` (web/audio flow)
+- `/lesson_start <student_uuid>`
+- `/lesson_add <текст>`
+- `/lesson_finish`
+- `/lesson_send`
 
-## Каноничная схема (сейчас)
+## Lesson flows
+
+### 1) Web/audio flow (существующий)
+1. `/lesson_now` создаёт урок и ссылку.
+2. Web-страница отправляет audio chunks в backend.
+3. `POST /finish` ставит задачу `process_audio_lesson` в Redis.
+4. Worker делает merge + transcript + draft и отправляет tutor preview.
+
+### 2) Text session flow (MVP v2)
+1. `/lesson_start <student_uuid>` создаёт lesson со статусом `in_progress`.
+2. `/lesson_add <text>` добавляет текстовые chunks в `lesson_chunks.content`.
+3. `/lesson_finish` переводит lesson в `processing` и ставит задачу `generate_artifacts`.
+4. Worker создаёт stub-артефакты (`summary`, `homework`) и переводит lesson в `draft_ready`.
+5. `/lesson_send` отправляет summary ученику и переводит lesson в `sent` (`sent_at` заполняется).
+
+Строгий порядок для text-flow: `in_progress -> processing -> draft_ready -> sent`.
+
+## Каноничная схема
+Таблицы:
 - `tutors`
 - `students`
 - `tutor_student`
@@ -74,35 +93,22 @@ curl http://localhost:${HOST_PORT:-8000}/health
 - `artifacts`
 - `alembic_version`
 
-## Whisper (локально)
-- Worker использует `faster-whisper` на CPU и автоматически скачивает модель при первом запуске.
-- Выбор модели через `WHISPER_MODEL`:
-  - `base` (default)
-  - `small` (лучше качество, тяжелее)
-- Кэш модели: `${STORAGE_PATH}/whisper-cache`.
+Ключевые инварианты:
+- `students.tg_user_id` nullable + partial unique (`IS NOT NULL`).
+- `tutor_student` composite PK (`tutor_id`, `student_id`).
+- `invites.token` unique.
+- Один `in_progress` lesson на tutor (partial unique index в `lessons`).
 
-## Поток обработки урока
-1. Web-страница отправляет чанки в backend.
-2. `finish` в backend:
-   - отмечает урок `finished`
-   - ставит задачу в Redis queue.
-3. Worker получает `process_lesson(lesson_id)` и делает:
-   - склейку записи
-   - транскрибацию через `faster-whisper`
-   - генерацию summary/difficulties/homework
-   - сохранение артефактов и черновика в БД
-   - отправку черновика учителю в Telegram.
-
-## Где смотреть транскрипт
-- В БД: поле `lessons.transcript_text`.
-- В файле: `${STORAGE_PATH}/lessons/<lesson_id>/transcript.txt`.
+## Документация
+- Runtime snapshot: `CURRENT_STATE.md`
+- Prod reset rollout: `DEPLOY_RESET_DB.md`
+- Архитектура: `ARCHITECTURE_OVERVIEW.md`
+- Контекст проекта: `PROJECT_CONTEXT.md`
 
 ## Логи
 
 ```bash
-docker compose logs -f worker
 docker compose logs -f backend
+docker compose logs -f worker
 docker compose logs -f bot
 ```
-
-В логах worker есть этапы транскрибации: `transcribing...`, `done transcribing`, длительность.

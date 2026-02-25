@@ -1,0 +1,31 @@
+name: Worker Alert Monitor
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/30 * * * *"
+
+jobs:
+  check-worker-alerts:
+    if: ${{ secrets.WORKER_ALERT_URL != '' }}
+    runs-on: ubuntu-latest
+    env:
+      WORKER_ALERT_URL: ${{ secrets.WORKER_ALERT_URL }}
+      ALERT_TIMEOUT_SECONDS: "15"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Check /alerts/worker
+        run: python -m tutor_assistant.ops.check_worker_alerts
+

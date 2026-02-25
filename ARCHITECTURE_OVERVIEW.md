@@ -98,6 +98,8 @@ Retry/failure policy:
 - `lesson_metrics:processing_duration_ms_last/max/sum/samples`
 - endpoint `GET /metrics/worker`
 - alert endpoint `GET /alerts/worker` (сравнение с threshold из env)
+- external checker: `python -m tutor_assistant.ops.check_worker_alerts`
+- GitHub schedule monitor: `.github/workflows/worker-alert-monitor.yml` (секрет `WORKER_ALERT_URL`)
 
 ## 7) Безопасность
 - В webhook логах нет полного payload.

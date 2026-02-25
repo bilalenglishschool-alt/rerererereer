@@ -186,3 +186,12 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
     - `queue_depth`, `processing_depth`, `dead_letter_depth`
     - `queue_latency_ms_last`, `queue_latency_ms_max`, `queue_latency_ms_avg`
     - `processing_duration_ms_last`, `processing_duration_ms_max`, `processing_duration_ms_avg`
+- External alert check script:
+  - `python -m tutor_assistant.ops.check_worker_alerts`
+  - env:
+    - `WORKER_ALERT_URL` (example: `https://<your-domain>/alerts/worker`)
+    - `ALERT_TIMEOUT_SECONDS` (default `10`)
+  - exit code: `0=ok`, `2=alert`, `1=endpoint/infra error`
+- Scheduled monitor workflow:
+  - `.github/workflows/worker-alert-monitor.yml` (every 30 minutes)
+  - requires repository secret: `WORKER_ALERT_URL`

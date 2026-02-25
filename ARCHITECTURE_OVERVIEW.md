@@ -32,7 +32,7 @@
 - `Artifact (artifacts)`
   - file-based (`path`) или text-based (`content`)
 - `TranscriptionJob (transcription_jobs)`
-  - статусы: `queued -> processing -> done` или `failed`
+  - статусы: `queued -> processing -> done` или `failed` / `canceled`
   - хранит `source_path`, `transcript_path`, `transcript_text`, `processing_attempts`
 
 ## 4) Основные потоки
@@ -62,9 +62,10 @@
 4. Worker обрабатывает задачу, вызывает Whisper и сохраняет transcript.
 5. Клиент читает статус/результат через `GET /api/transcribe/jobs/{job_id}`.
 6. Для `failed` доступен `POST /api/transcribe/jobs/{job_id}/retry`.
-7. Для защиты backend применяет upload validation и rate limit (`6 req/min` на IP).
-8. Worker периодически чистит старые `done/failed` transcription jobs и удаляет их файлы.
-9. Для UX доступны `GET /api/transcribe/jobs` (history) и `GET /api/transcribe/jobs/{job_id}/transcript`.
+7. Для `queued/processing` доступен `POST /api/transcribe/jobs/{job_id}/cancel`.
+8. Для защиты backend применяет upload validation и rate limit (`6 req/min` на IP).
+9. Worker периодически чистит старые `done/failed/canceled` transcription jobs и удаляет их файлы.
+10. Для UX доступны `GET /api/transcribe/jobs` (history) и `GET /api/transcribe/jobs/{job_id}/transcript`.
 
 ## 5) Queue протокол
 Redis list `lesson_tasks`.

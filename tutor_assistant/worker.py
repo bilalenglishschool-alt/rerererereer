@@ -433,6 +433,10 @@ def process_transcription_job(job_id: str) -> None:
             logger.warning("Transcription job %s was not found", job_id)
             return
 
+        if job.status == "canceled":
+            logger.info("Transcription job %s canceled, skipping", job_id)
+            return
+
         if job.status == "done":
             logger.info("Transcription job %s already done, skipping", job_id)
             return
@@ -447,6 +451,10 @@ def process_transcription_job(job_id: str) -> None:
         job = db.query(TranscriptionJob).filter(TranscriptionJob.id == job_uuid).first()
         if not job:
             logger.warning("Transcription job %s disappeared during processing", job_id)
+            return
+
+        if job.status == "canceled":
+            logger.info("Transcription job %s canceled during processing, skipping", job_id)
             return
 
         source_path = Path(job.source_path)
@@ -494,7 +502,7 @@ def cleanup_transcription_jobs(retention_days: int, batch_size: int = 200) -> in
     with SessionLocal() as db:
         stale_jobs = (
             db.query(TranscriptionJob)
-            .filter(TranscriptionJob.status.in_(("done", "failed")))
+            .filter(TranscriptionJob.status.in_(("done", "failed", "canceled")))
             .filter(
                 or_(
                     and_(

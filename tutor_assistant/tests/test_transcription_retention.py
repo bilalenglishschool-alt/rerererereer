@@ -68,7 +68,7 @@ class TranscriptionRetentionCleanupTest(unittest.TestCase):
         self._job_dirs.add(job_dir)
         return str(job_uuid)
 
-    def test_cleanup_removes_only_stale_done_and_failed_jobs(self) -> None:
+    def test_cleanup_removes_only_stale_done_failed_and_canceled_jobs(self) -> None:
         stale_done_id = self._create_job(
             status="done",
             created_days_ago=30,
@@ -78,6 +78,11 @@ class TranscriptionRetentionCleanupTest(unittest.TestCase):
             status="failed",
             created_days_ago=20,
             processed_days_ago=None,
+        )
+        stale_canceled_id = self._create_job(
+            status="canceled",
+            created_days_ago=25,
+            processed_days_ago=25,
         )
         recent_done_id = self._create_job(
             status="done",
@@ -91,28 +96,34 @@ class TranscriptionRetentionCleanupTest(unittest.TestCase):
         )
 
         deleted_count = cleanup_transcription_jobs(retention_days=14, batch_size=100)
-        self.assertEqual(deleted_count, 2)
+        self.assertEqual(deleted_count, 3)
 
         with SessionLocal() as db:
             stale_done = db.query(TranscriptionJob).filter(TranscriptionJob.id == UUID(stale_done_id)).first()
             stale_failed = db.query(TranscriptionJob).filter(
                 TranscriptionJob.id == UUID(stale_failed_id)
             ).first()
+            stale_canceled = db.query(TranscriptionJob).filter(
+                TranscriptionJob.id == UUID(stale_canceled_id)
+            ).first()
             recent_done = db.query(TranscriptionJob).filter(TranscriptionJob.id == UUID(recent_done_id)).first()
             queued_old = db.query(TranscriptionJob).filter(TranscriptionJob.id == UUID(queued_old_id)).first()
 
         self.assertIsNone(stale_done)
         self.assertIsNone(stale_failed)
+        self.assertIsNone(stale_canceled)
         self.assertIsNotNone(recent_done)
         self.assertIsNotNone(queued_old)
 
         stale_done_dir = worker_settings.storage_path / "transcriptions" / stale_done_id
         stale_failed_dir = worker_settings.storage_path / "transcriptions" / stale_failed_id
+        stale_canceled_dir = worker_settings.storage_path / "transcriptions" / stale_canceled_id
         recent_done_dir = worker_settings.storage_path / "transcriptions" / recent_done_id
         queued_old_dir = worker_settings.storage_path / "transcriptions" / queued_old_id
 
         self.assertFalse(stale_done_dir.exists())
         self.assertFalse(stale_failed_dir.exists())
+        self.assertFalse(stale_canceled_dir.exists())
         self.assertTrue(recent_done_dir.exists())
         self.assertTrue(queued_old_dir.exists())
 

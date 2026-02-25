@@ -31,11 +31,12 @@
   - `POST /api/transcribe/jobs`
   - `GET /api/transcribe/jobs`
   - `GET /api/transcribe/jobs/{job_id}`
+  - `POST /api/transcribe/jobs/{job_id}/cancel`
   - `GET /api/transcribe/jobs/{job_id}/transcript`
   - `POST /api/transcribe/jobs/{job_id}/retry`
   - web UI `/transcribe`.
   - защита API: размер/тип файла + rate limit (`6` загрузок в минуту на IP).
-  - retention cleanup: worker удаляет старые `done/failed` jobs и их файлы.
+  - retention cleanup: worker удаляет старые `done/failed/canceled` jobs и их файлы.
 
 ## Критичные инварианты
 - Один `in_progress` lesson на tutor (partial unique index).

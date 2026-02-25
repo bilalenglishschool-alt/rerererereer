@@ -25,7 +25,7 @@
   - статусный переход `in_progress -> processing -> draft_ready -> sent`.
 - Invite-flow тесты (invalid/expired/used/idempotent).
 - Webhook privacy regression test (metadata-only logging).
-- Worker retry/dead-letter policy + базовые reliability counters.
+- Worker retry/dead-letter policy + reliability counters (включая per-task counters).
 - Endpoint alerting: `GET /alerts/worker` по порогам `worker_errors_last_10m`, `dead_letter_depth`, `queue_depth`, `worker_heartbeat_age_seconds`.
 - Whisper transcription jobs:
   - `POST /api/transcribe/jobs`

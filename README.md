@@ -168,6 +168,8 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
 - Worker counters в Redis:
   - `lesson_metrics:tasks_processed_total`
   - `lesson_metrics:task_failures_total`
+  - `lesson_metrics:tasks_processed_total:<task_type>`
+  - `lesson_metrics:task_failures_total:<task_type>`
 - Queue latency metrics (ms):
   - `lesson_metrics:queue_latency_ms_last`
   - `lesson_metrics:queue_latency_ms_max`
@@ -195,9 +197,11 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
     - `queue_latency_ms_last`, `queue_latency_ms_max`, `queue_latency_ms_avg`
     - `processing_duration_ms_last`, `processing_duration_ms_max`, `processing_duration_ms_avg`
     - `worker_heartbeat_ts`, `worker_heartbeat_age_seconds`
+    - `tasks_processed_by_type`, `task_failures_by_type`
   - `/metrics/worker/prometheus`:
     - text format `text/plain; version=0.0.4`
     - ready for Prometheus scrape
+    - includes labeled counters by `task_type`
   - when Redis is unavailable, metrics endpoints return `503`
 - External alert check script:
   - `python -m tutor_assistant.ops.check_worker_alerts`

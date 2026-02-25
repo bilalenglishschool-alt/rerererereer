@@ -11,6 +11,9 @@ from tutor_assistant.queue import (
     LESSON_DEAD_LETTER_QUEUE_NAME,
     LESSON_PROCESSING_QUEUE_NAME,
     LESSON_QUEUE_NAME,
+    TASK_GENERATE_ARTIFACTS,
+    TASK_PROCESS_AUDIO,
+    TASK_TRANSCRIBE_JOB,
     WORKER_FAILURE_EVENTS_ZSET_KEY,
     WORKER_METRIC_PROCESSING_DURATION_LAST_MS_KEY,
     WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY,
@@ -72,6 +75,12 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
                 WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY: 301,
                 WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY: 2,
                 WORKER_METRIC_HEARTBEAT_TS_KEY: 1995,
+                f"{WORKER_METRIC_TASKS_PROCESSED_KEY}:{TASK_PROCESS_AUDIO}": 11,
+                f"{WORKER_METRIC_TASKS_PROCESSED_KEY}:{TASK_GENERATE_ARTIFACTS}": 22,
+                f"{WORKER_METRIC_TASKS_PROCESSED_KEY}:{TASK_TRANSCRIBE_JOB}": 33,
+                f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_PROCESS_AUDIO}": 1,
+                f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_GENERATE_ARTIFACTS}": 2,
+                f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_TRANSCRIBE_JOB}": 0,
             },
             queue_depth=4,
             processing_depth=1,
@@ -99,6 +108,22 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["processing_duration_ms_avg"], 150.5)
         self.assertEqual(payload["worker_heartbeat_ts"], 1995)
         self.assertEqual(payload["worker_heartbeat_age_seconds"], 5)
+        self.assertEqual(
+            payload["tasks_processed_by_type"],
+            {
+                TASK_PROCESS_AUDIO: 11,
+                TASK_GENERATE_ARTIFACTS: 22,
+                TASK_TRANSCRIBE_JOB: 33,
+            },
+        )
+        self.assertEqual(
+            payload["task_failures_by_type"],
+            {
+                TASK_PROCESS_AUDIO: 1,
+                TASK_GENERATE_ARTIFACTS: 2,
+                TASK_TRANSCRIBE_JOB: 0,
+            },
+        )
         self.assertTrue(redis_stub.closed)
 
     def test_metrics_avg_fields_are_zero_when_no_samples(self) -> None:
@@ -144,6 +169,12 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
                 WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY: 301,
                 WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY: 2,
                 WORKER_METRIC_HEARTBEAT_TS_KEY: 1995,
+                f"{WORKER_METRIC_TASKS_PROCESSED_KEY}:{TASK_PROCESS_AUDIO}": 11,
+                f"{WORKER_METRIC_TASKS_PROCESSED_KEY}:{TASK_GENERATE_ARTIFACTS}": 22,
+                f"{WORKER_METRIC_TASKS_PROCESSED_KEY}:{TASK_TRANSCRIBE_JOB}": 33,
+                f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_PROCESS_AUDIO}": 1,
+                f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_GENERATE_ARTIFACTS}": 2,
+                f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_TRANSCRIBE_JOB}": 0,
             },
             queue_depth=4,
             processing_depth=1,
@@ -183,6 +214,30 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         )
         self.assertIn(
             "tutor_assistant_worker_heartbeat_age_seconds 5",
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_tasks_processed_by_type_total{{task_type="{TASK_PROCESS_AUDIO}"}} 11',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_tasks_processed_by_type_total{{task_type="{TASK_GENERATE_ARTIFACTS}"}} 22',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_tasks_processed_by_type_total{{task_type="{TASK_TRANSCRIBE_JOB}"}} 33',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_task_failures_by_type_total{{task_type="{TASK_PROCESS_AUDIO}"}} 1',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_task_failures_by_type_total{{task_type="{TASK_GENERATE_ARTIFACTS}"}} 2',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_task_failures_by_type_total{{task_type="{TASK_TRANSCRIBE_JOB}"}} 0',
             body,
         )
         self.assertTrue(redis_stub.closed)

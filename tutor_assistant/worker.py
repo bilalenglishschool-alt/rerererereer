@@ -81,24 +81,40 @@ def record_timing_metric(
     max_key: str,
     sum_key: str,
     samples_key: str,
+    task_type: str | None = None,
 ) -> None:
     try:
         metric_value = max(0, int(value_ms))
+        task_last_key = f"{last_key}:{task_type}" if task_type else ""
+        task_max_key = f"{max_key}:{task_type}" if task_type else ""
+        task_sum_key = f"{sum_key}:{task_type}" if task_type else ""
+        task_samples_key = f"{samples_key}:{task_type}" if task_type else ""
+
         pipeline = redis_client.pipeline(transaction=True)
         pipeline.set(last_key, metric_value)
         pipeline.incrby(sum_key, metric_value)
         pipeline.incr(samples_key)
+        if task_type:
+            pipeline.set(task_last_key, metric_value)
+            pipeline.incrby(task_sum_key, metric_value)
+            pipeline.incr(task_samples_key)
         pipeline.execute()
 
         current_max_raw = redis_client.get(max_key)
         current_max = int(current_max_raw or 0)
         if metric_value > current_max:
             redis_client.set(max_key, metric_value)
+
+        if task_type:
+            current_task_max_raw = redis_client.get(task_max_key)
+            current_task_max = int(current_task_max_raw or 0)
+            if metric_value > current_task_max:
+                redis_client.set(task_max_key, metric_value)
     except Exception:  # noqa: BLE001
         logger.debug("Failed to record timing metric", exc_info=True)
 
 
-def record_queue_latency(redis_client, latency_ms: int) -> None:
+def record_queue_latency(redis_client, latency_ms: int, task_type: str | None = None) -> None:
     record_timing_metric(
         redis_client,
         latency_ms,
@@ -106,10 +122,15 @@ def record_queue_latency(redis_client, latency_ms: int) -> None:
         max_key=WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY,
         sum_key=WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY,
         samples_key=WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY,
+        task_type=task_type,
     )
 
 
-def record_processing_duration(redis_client, duration_ms: int) -> None:
+def record_processing_duration(
+    redis_client,
+    duration_ms: int,
+    task_type: str | None = None,
+) -> None:
     record_timing_metric(
         redis_client,
         duration_ms,
@@ -117,6 +138,7 @@ def record_processing_duration(redis_client, duration_ms: int) -> None:
         max_key=WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY,
         sum_key=WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY,
         samples_key=WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY,
+        task_type=task_type,
     )
 
 
@@ -574,7 +596,7 @@ def main() -> None:
         attempt_started_mono = time.monotonic()
         if enqueued_at is not None:
             queue_latency_ms = max(0, attempt_started_at_ms - int(enqueued_at))
-            record_queue_latency(redis_client, queue_latency_ms)
+            record_queue_latency(redis_client, queue_latency_ms, task_type=task_type)
 
         try:
             if task_type == TASK_GENERATE_ARTIFACTS:
@@ -597,7 +619,11 @@ def main() -> None:
             logger.info("Lesson %s failure policy applied: %s", lesson_id, result)
         finally:
             attempt_duration_ms = int((time.monotonic() - attempt_started_mono) * 1000)
-            record_processing_duration(redis_client, attempt_duration_ms)
+            record_processing_duration(
+                redis_client,
+                attempt_duration_ms,
+                task_type=task_type,
+            )
             release_lesson_lock(redis_client, lesson_id=lesson_id)
 
 

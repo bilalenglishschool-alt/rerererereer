@@ -164,6 +164,9 @@ WORKER_KNOWN_TASK_TYPES: tuple[str, ...] = (
     TASK_GENERATE_ARTIFACTS,
     TASK_TRANSCRIBE_JOB,
 )
+WorkerMetricByType = dict[str, int | float]
+WorkerMetricValue = int | float | WorkerMetricByType
+WorkerMetricsPayload = dict[str, WorkerMetricValue]
 
 
 def _extract_webhook_meta(update: object) -> tuple[object, str, object]:
@@ -396,7 +399,32 @@ def collect_task_type_counters(redis_client, base_key: str) -> dict[str, int]:
     }
 
 
-def collect_worker_metrics(redis_client) -> dict[str, int | float | dict[str, int]]:
+def collect_task_type_timing_metrics(
+    redis_client,
+    *,
+    last_key: str,
+    max_key: str,
+    sum_key: str,
+    samples_key: str,
+) -> tuple[dict[str, int], dict[str, int], dict[str, float]]:
+    last_values: dict[str, int] = {}
+    max_values: dict[str, int] = {}
+    avg_values: dict[str, float] = {}
+
+    for task_type in WORKER_KNOWN_TASK_TYPES:
+        task_last = int(redis_client.get(f"{last_key}:{task_type}") or 0)
+        task_max = int(redis_client.get(f"{max_key}:{task_type}") or 0)
+        task_sum = int(redis_client.get(f"{sum_key}:{task_type}") or 0)
+        task_samples = int(redis_client.get(f"{samples_key}:{task_type}") or 0)
+
+        last_values[task_type] = task_last
+        max_values[task_type] = task_max
+        avg_values[task_type] = round(task_sum / task_samples, 2) if task_samples else 0.0
+
+    return last_values, max_values, avg_values
+
+
+def collect_worker_metrics(redis_client) -> WorkerMetricsPayload:
     now_ts = int(time.time())
     ten_minutes_ago = now_ts - 600
 
@@ -413,6 +441,28 @@ def collect_worker_metrics(redis_client) -> dict[str, int | float | dict[str, in
     task_failures_by_type = collect_task_type_counters(
         redis_client,
         WORKER_METRIC_TASKS_FAILED_KEY,
+    )
+    (
+        queue_latency_last_by_type,
+        queue_latency_max_by_type,
+        queue_latency_avg_by_type,
+    ) = collect_task_type_timing_metrics(
+        redis_client,
+        last_key=WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY,
+        max_key=WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY,
+        sum_key=WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY,
+        samples_key=WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY,
+    )
+    (
+        processing_duration_last_by_type,
+        processing_duration_max_by_type,
+        processing_duration_avg_by_type,
+    ) = collect_task_type_timing_metrics(
+        redis_client,
+        last_key=WORKER_METRIC_PROCESSING_DURATION_LAST_MS_KEY,
+        max_key=WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY,
+        sum_key=WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY,
+        samples_key=WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY,
     )
 
     return {
@@ -444,10 +494,47 @@ def collect_worker_metrics(redis_client) -> dict[str, int | float | dict[str, in
         "worker_heartbeat_age_seconds": heartbeat_age_seconds,
         "tasks_processed_by_type": tasks_processed_by_type,
         "task_failures_by_type": task_failures_by_type,
+        "queue_latency_ms_last_by_type": queue_latency_last_by_type,
+        "queue_latency_ms_max_by_type": queue_latency_max_by_type,
+        "queue_latency_ms_avg_by_type": queue_latency_avg_by_type,
+        "processing_duration_ms_last_by_type": processing_duration_last_by_type,
+        "processing_duration_ms_max_by_type": processing_duration_max_by_type,
+        "processing_duration_ms_avg_by_type": processing_duration_avg_by_type,
     }
 
 
-def render_worker_metrics_prometheus(metrics: dict[str, int | float | dict[str, int]]) -> str:
+def get_metrics_by_task_type(metrics: WorkerMetricsPayload, field_name: str) -> WorkerMetricByType:
+    raw_value = metrics.get(field_name, {})
+    if not isinstance(raw_value, dict):
+        return {}
+
+    payload: WorkerMetricByType = {}
+    for task_type in WORKER_KNOWN_TASK_TYPES:
+        task_value = raw_value.get(task_type, 0)
+        if isinstance(task_value, bool):
+            payload[task_type] = 1 if task_value else 0
+        elif isinstance(task_value, (int, float)):
+            payload[task_type] = task_value
+        else:
+            payload[task_type] = 0
+    return payload
+
+
+def append_prometheus_metric_by_task_type(
+    lines: list[str],
+    *,
+    metric_name: str,
+    metric_type: str,
+    metric_help: str,
+    values: WorkerMetricByType,
+) -> None:
+    lines.append(f"# HELP {metric_name} {metric_help}")
+    lines.append(f"# TYPE {metric_name} {metric_type}")
+    for task_type in WORKER_KNOWN_TASK_TYPES:
+        lines.append(f'{metric_name}{{task_type="{task_type}"}} {values.get(task_type, 0)}')
+
+
+def render_worker_metrics_prometheus(metrics: WorkerMetricsPayload) -> str:
     lines: list[str] = []
 
     for field_name, metric_name, metric_type, metric_help in WORKER_PROMETHEUS_METRICS:
@@ -463,40 +550,68 @@ def render_worker_metrics_prometheus(metrics: dict[str, int | float | dict[str, 
         lines.append(f"# TYPE {metric_name} {metric_type}")
         lines.append(f"{metric_name} {metric_value}")
 
-    tasks_processed_by_type = metrics.get("tasks_processed_by_type", {})
-    task_failures_by_type = metrics.get("task_failures_by_type", {})
-    if not isinstance(tasks_processed_by_type, dict):
-        tasks_processed_by_type = {}
-    if not isinstance(task_failures_by_type, dict):
-        task_failures_by_type = {}
-
-    lines.append(
-        "# HELP tutor_assistant_worker_tasks_processed_by_type_total "
-        "Total number of processed worker tasks by task type."
+    append_prometheus_metric_by_task_type(
+        lines,
+        metric_name="tutor_assistant_worker_tasks_processed_by_type_total",
+        metric_type="counter",
+        metric_help="Total number of processed worker tasks by task type.",
+        values=get_metrics_by_task_type(metrics, "tasks_processed_by_type"),
     )
-    lines.append("# TYPE tutor_assistant_worker_tasks_processed_by_type_total counter")
-    for task_type in WORKER_KNOWN_TASK_TYPES:
-        lines.append(
-            "tutor_assistant_worker_tasks_processed_by_type_total"
-            f'{{task_type="{task_type}"}} {int(tasks_processed_by_type.get(task_type, 0))}'
-        )
-
-    lines.append(
-        "# HELP tutor_assistant_worker_task_failures_by_type_total "
-        "Total number of failed worker tasks by task type."
+    append_prometheus_metric_by_task_type(
+        lines,
+        metric_name="tutor_assistant_worker_task_failures_by_type_total",
+        metric_type="counter",
+        metric_help="Total number of failed worker tasks by task type.",
+        values=get_metrics_by_task_type(metrics, "task_failures_by_type"),
     )
-    lines.append("# TYPE tutor_assistant_worker_task_failures_by_type_total counter")
-    for task_type in WORKER_KNOWN_TASK_TYPES:
-        lines.append(
-            "tutor_assistant_worker_task_failures_by_type_total"
-            f'{{task_type="{task_type}"}} {int(task_failures_by_type.get(task_type, 0))}'
-        )
+    append_prometheus_metric_by_task_type(
+        lines,
+        metric_name="tutor_assistant_worker_queue_latency_ms_last_by_type",
+        metric_type="gauge",
+        metric_help="Last observed queue latency in milliseconds by task type.",
+        values=get_metrics_by_task_type(metrics, "queue_latency_ms_last_by_type"),
+    )
+    append_prometheus_metric_by_task_type(
+        lines,
+        metric_name="tutor_assistant_worker_queue_latency_ms_max_by_type",
+        metric_type="gauge",
+        metric_help="Maximum observed queue latency in milliseconds by task type.",
+        values=get_metrics_by_task_type(metrics, "queue_latency_ms_max_by_type"),
+    )
+    append_prometheus_metric_by_task_type(
+        lines,
+        metric_name="tutor_assistant_worker_queue_latency_ms_avg_by_type",
+        metric_type="gauge",
+        metric_help="Average observed queue latency in milliseconds by task type.",
+        values=get_metrics_by_task_type(metrics, "queue_latency_ms_avg_by_type"),
+    )
+    append_prometheus_metric_by_task_type(
+        lines,
+        metric_name="tutor_assistant_worker_processing_duration_ms_last_by_type",
+        metric_type="gauge",
+        metric_help="Last observed processing duration in milliseconds by task type.",
+        values=get_metrics_by_task_type(metrics, "processing_duration_ms_last_by_type"),
+    )
+    append_prometheus_metric_by_task_type(
+        lines,
+        metric_name="tutor_assistant_worker_processing_duration_ms_max_by_type",
+        metric_type="gauge",
+        metric_help="Maximum observed processing duration in milliseconds by task type.",
+        values=get_metrics_by_task_type(metrics, "processing_duration_ms_max_by_type"),
+    )
+    append_prometheus_metric_by_task_type(
+        lines,
+        metric_name="tutor_assistant_worker_processing_duration_ms_avg_by_type",
+        metric_type="gauge",
+        metric_help="Average observed processing duration in milliseconds by task type.",
+        values=get_metrics_by_task_type(metrics, "processing_duration_ms_avg_by_type"),
+    )
 
     lines.append("")
     return "\n".join(lines)
 
 
-def evaluate_worker_alerts(metrics: dict[str, int | float | dict[str, int]]) -> list[str]:
+def evaluate_worker_alerts(metrics: WorkerMetricsPayload) -> list[str]:
     alerts: list[str] = []
     error_threshold = int(settings.worker_alert_errors_last_10m_threshold)
     dead_letter_threshold = int(settings.worker_alert_dead_letter_threshold)
@@ -534,7 +649,7 @@ def evaluate_worker_alerts(metrics: dict[str, int | float | dict[str, int]]) -> 
     return alerts
 
 
-def load_worker_metrics_or_503() -> dict[str, int | float | dict[str, int]]:
+def load_worker_metrics_or_503() -> WorkerMetricsPayload:
     redis_client = None
     try:
         redis_client = get_redis_client(settings)

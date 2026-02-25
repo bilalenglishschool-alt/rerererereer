@@ -175,11 +175,19 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
   - `lesson_metrics:queue_latency_ms_max`
   - `lesson_metrics:queue_latency_ms_sum`
   - `lesson_metrics:queue_latency_ms_samples`
+  - `lesson_metrics:queue_latency_ms_last:<task_type>`
+  - `lesson_metrics:queue_latency_ms_max:<task_type>`
+  - `lesson_metrics:queue_latency_ms_sum:<task_type>`
+  - `lesson_metrics:queue_latency_ms_samples:<task_type>`
 - Processing duration metrics (ms):
   - `lesson_metrics:processing_duration_ms_last`
   - `lesson_metrics:processing_duration_ms_max`
   - `lesson_metrics:processing_duration_ms_sum`
   - `lesson_metrics:processing_duration_ms_samples`
+  - `lesson_metrics:processing_duration_ms_last:<task_type>`
+  - `lesson_metrics:processing_duration_ms_max:<task_type>`
+  - `lesson_metrics:processing_duration_ms_sum:<task_type>`
+  - `lesson_metrics:processing_duration_ms_samples:<task_type>`
 - Failure events (last-10m check): `lesson_metrics:worker_failures` (sorted set)
 - Dead-letter queue: `lesson_tasks:dead`
 - HTTP endpoint:
@@ -195,13 +203,15 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
     - `tasks_processed_total`, `task_failures_total`, `worker_errors_last_10m`
     - `queue_depth`, `processing_depth`, `dead_letter_depth`
     - `queue_latency_ms_last`, `queue_latency_ms_max`, `queue_latency_ms_avg`
+    - `queue_latency_ms_last_by_type`, `queue_latency_ms_max_by_type`, `queue_latency_ms_avg_by_type`
     - `processing_duration_ms_last`, `processing_duration_ms_max`, `processing_duration_ms_avg`
+    - `processing_duration_ms_last_by_type`, `processing_duration_ms_max_by_type`, `processing_duration_ms_avg_by_type`
     - `worker_heartbeat_ts`, `worker_heartbeat_age_seconds`
     - `tasks_processed_by_type`, `task_failures_by_type`
   - `/metrics/worker/prometheus`:
     - text format `text/plain; version=0.0.4`
     - ready for Prometheus scrape
-    - includes labeled counters by `task_type`
+    - includes labeled counters and labeled latency/duration gauges by `task_type`
   - when Redis is unavailable, metrics endpoints return `503`
 - External alert check script:
   - `python -m tutor_assistant.ops.check_worker_alerts`

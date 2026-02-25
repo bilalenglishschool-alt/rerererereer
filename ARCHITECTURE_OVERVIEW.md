@@ -97,12 +97,14 @@ Retry/failure policy:
 - `lesson_metrics:task_failures_total:<task_type>`
 - `lesson_metrics:worker_failures` (ZSET, для окна 10 минут)
 - `lesson_metrics:queue_latency_ms_last/max/sum/samples`
+- `lesson_metrics:queue_latency_ms_last/max/sum/samples:<task_type>`
 - `lesson_metrics:processing_duration_ms_last/max/sum/samples`
+- `lesson_metrics:processing_duration_ms_last/max/sum/samples:<task_type>`
 - `lesson_metrics:worker_heartbeat_ts`
 - endpoint `GET /metrics/worker`
 - endpoint `GET /metrics/worker/prometheus` (Prometheus text exposition)
-- `/metrics/worker` включает per-task counters (`*_by_type`)
-- `/metrics/worker/prometheus` включает labeled counters by `task_type`
+- `/metrics/worker` включает per-task counters и per-task latency/duration (`*_by_type`)
+- `/metrics/worker/prometheus` включает labeled counters и labeled latency/duration by `task_type`
 - alert endpoint `GET /alerts/worker` (сравнение с threshold из env: errors/dead_letter/queue_depth/heartbeat_age)
 - при недоступном Redis endpoints metrics/alerts возвращают `503`
 - external checker: `python -m tutor_assistant.ops.check_worker_alerts`

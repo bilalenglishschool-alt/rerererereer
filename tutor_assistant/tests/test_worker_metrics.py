@@ -81,6 +81,30 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
                 f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_PROCESS_AUDIO}": 1,
                 f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_GENERATE_ARTIFACTS}": 2,
                 f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_TRANSCRIBE_JOB}": 0,
+                f"{WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY}:{TASK_PROCESS_AUDIO}": 45,
+                f"{WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY}:{TASK_GENERATE_ARTIFACTS}": 60,
+                f"{WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY}:{TASK_TRANSCRIBE_JOB}": 90,
+                f"{WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY}:{TASK_PROCESS_AUDIO}": 110,
+                f"{WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY}:{TASK_GENERATE_ARTIFACTS}": 130,
+                f"{WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY}:{TASK_TRANSCRIBE_JOB}": 180,
+                f"{WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY}:{TASK_PROCESS_AUDIO}": 200,
+                f"{WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY}:{TASK_GENERATE_ARTIFACTS}": 240,
+                f"{WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY}:{TASK_TRANSCRIBE_JOB}": 500,
+                f"{WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY}:{TASK_PROCESS_AUDIO}": 4,
+                f"{WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY}:{TASK_GENERATE_ARTIFACTS}": 3,
+                f"{WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY}:{TASK_TRANSCRIBE_JOB}": 5,
+                f"{WORKER_METRIC_PROCESSING_DURATION_LAST_MS_KEY}:{TASK_PROCESS_AUDIO}": 170,
+                f"{WORKER_METRIC_PROCESSING_DURATION_LAST_MS_KEY}:{TASK_GENERATE_ARTIFACTS}": 220,
+                f"{WORKER_METRIC_PROCESSING_DURATION_LAST_MS_KEY}:{TASK_TRANSCRIBE_JOB}": 410,
+                f"{WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY}:{TASK_PROCESS_AUDIO}": 260,
+                f"{WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY}:{TASK_GENERATE_ARTIFACTS}": 290,
+                f"{WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY}:{TASK_TRANSCRIBE_JOB}": 480,
+                f"{WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY}:{TASK_PROCESS_AUDIO}": 600,
+                f"{WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY}:{TASK_GENERATE_ARTIFACTS}": 500,
+                f"{WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY}:{TASK_TRANSCRIBE_JOB}": 900,
+                f"{WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY}:{TASK_PROCESS_AUDIO}": 4,
+                f"{WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY}:{TASK_GENERATE_ARTIFACTS}": 2,
+                f"{WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY}:{TASK_TRANSCRIBE_JOB}": 3,
             },
             queue_depth=4,
             processing_depth=1,
@@ -108,6 +132,54 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["processing_duration_ms_avg"], 150.5)
         self.assertEqual(payload["worker_heartbeat_ts"], 1995)
         self.assertEqual(payload["worker_heartbeat_age_seconds"], 5)
+        self.assertEqual(
+            payload["queue_latency_ms_last_by_type"],
+            {
+                TASK_PROCESS_AUDIO: 45,
+                TASK_GENERATE_ARTIFACTS: 60,
+                TASK_TRANSCRIBE_JOB: 90,
+            },
+        )
+        self.assertEqual(
+            payload["queue_latency_ms_max_by_type"],
+            {
+                TASK_PROCESS_AUDIO: 110,
+                TASK_GENERATE_ARTIFACTS: 130,
+                TASK_TRANSCRIBE_JOB: 180,
+            },
+        )
+        self.assertEqual(
+            payload["queue_latency_ms_avg_by_type"],
+            {
+                TASK_PROCESS_AUDIO: 50.0,
+                TASK_GENERATE_ARTIFACTS: 80.0,
+                TASK_TRANSCRIBE_JOB: 100.0,
+            },
+        )
+        self.assertEqual(
+            payload["processing_duration_ms_last_by_type"],
+            {
+                TASK_PROCESS_AUDIO: 170,
+                TASK_GENERATE_ARTIFACTS: 220,
+                TASK_TRANSCRIBE_JOB: 410,
+            },
+        )
+        self.assertEqual(
+            payload["processing_duration_ms_max_by_type"],
+            {
+                TASK_PROCESS_AUDIO: 260,
+                TASK_GENERATE_ARTIFACTS: 290,
+                TASK_TRANSCRIBE_JOB: 480,
+            },
+        )
+        self.assertEqual(
+            payload["processing_duration_ms_avg_by_type"],
+            {
+                TASK_PROCESS_AUDIO: 150.0,
+                TASK_GENERATE_ARTIFACTS: 250.0,
+                TASK_TRANSCRIBE_JOB: 300.0,
+            },
+        )
         self.assertEqual(
             payload["tasks_processed_by_type"],
             {
@@ -144,6 +216,22 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["queue_latency_ms_avg"], 0.0)
         self.assertEqual(payload["processing_duration_ms_avg"], 0.0)
         self.assertEqual(payload["worker_heartbeat_age_seconds"], -1)
+        self.assertEqual(
+            payload["queue_latency_ms_avg_by_type"],
+            {
+                TASK_PROCESS_AUDIO: 0.0,
+                TASK_GENERATE_ARTIFACTS: 0.0,
+                TASK_TRANSCRIBE_JOB: 0.0,
+            },
+        )
+        self.assertEqual(
+            payload["processing_duration_ms_avg_by_type"],
+            {
+                TASK_PROCESS_AUDIO: 0.0,
+                TASK_GENERATE_ARTIFACTS: 0.0,
+                TASK_TRANSCRIBE_JOB: 0.0,
+            },
+        )
         self.assertTrue(redis_stub.closed)
 
     def test_metrics_endpoint_returns_503_when_redis_unavailable(self) -> None:
@@ -175,6 +263,30 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
                 f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_PROCESS_AUDIO}": 1,
                 f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_GENERATE_ARTIFACTS}": 2,
                 f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_TRANSCRIBE_JOB}": 0,
+                f"{WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY}:{TASK_PROCESS_AUDIO}": 45,
+                f"{WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY}:{TASK_GENERATE_ARTIFACTS}": 60,
+                f"{WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY}:{TASK_TRANSCRIBE_JOB}": 90,
+                f"{WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY}:{TASK_PROCESS_AUDIO}": 110,
+                f"{WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY}:{TASK_GENERATE_ARTIFACTS}": 130,
+                f"{WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY}:{TASK_TRANSCRIBE_JOB}": 180,
+                f"{WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY}:{TASK_PROCESS_AUDIO}": 200,
+                f"{WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY}:{TASK_GENERATE_ARTIFACTS}": 240,
+                f"{WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY}:{TASK_TRANSCRIBE_JOB}": 500,
+                f"{WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY}:{TASK_PROCESS_AUDIO}": 4,
+                f"{WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY}:{TASK_GENERATE_ARTIFACTS}": 3,
+                f"{WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY}:{TASK_TRANSCRIBE_JOB}": 5,
+                f"{WORKER_METRIC_PROCESSING_DURATION_LAST_MS_KEY}:{TASK_PROCESS_AUDIO}": 170,
+                f"{WORKER_METRIC_PROCESSING_DURATION_LAST_MS_KEY}:{TASK_GENERATE_ARTIFACTS}": 220,
+                f"{WORKER_METRIC_PROCESSING_DURATION_LAST_MS_KEY}:{TASK_TRANSCRIBE_JOB}": 410,
+                f"{WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY}:{TASK_PROCESS_AUDIO}": 260,
+                f"{WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY}:{TASK_GENERATE_ARTIFACTS}": 290,
+                f"{WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY}:{TASK_TRANSCRIBE_JOB}": 480,
+                f"{WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY}:{TASK_PROCESS_AUDIO}": 600,
+                f"{WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY}:{TASK_GENERATE_ARTIFACTS}": 500,
+                f"{WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY}:{TASK_TRANSCRIBE_JOB}": 900,
+                f"{WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY}:{TASK_PROCESS_AUDIO}": 4,
+                f"{WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY}:{TASK_GENERATE_ARTIFACTS}": 2,
+                f"{WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY}:{TASK_TRANSCRIBE_JOB}": 3,
             },
             queue_depth=4,
             processing_depth=1,
@@ -238,6 +350,22 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         )
         self.assertIn(
             f'tutor_assistant_worker_task_failures_by_type_total{{task_type="{TASK_TRANSCRIBE_JOB}"}} 0',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_queue_latency_ms_last_by_type{{task_type="{TASK_PROCESS_AUDIO}"}} 45',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_queue_latency_ms_avg_by_type{{task_type="{TASK_GENERATE_ARTIFACTS}"}} 80.0',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_processing_duration_ms_max_by_type{{task_type="{TASK_TRANSCRIBE_JOB}"}} 480',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_processing_duration_ms_avg_by_type{{task_type="{TASK_TRANSCRIBE_JOB}"}} 300.0',
             body,
         )
         self.assertTrue(redis_stub.closed)

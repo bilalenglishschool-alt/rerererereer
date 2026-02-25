@@ -1,95 +1,116 @@
 # CURRENT_STATE
 
-Дата: 2026-02-24
+Дата snapshot: 2026-02-25
 Репозиторий: `/Users/artur/Desktop/tutor-assistant-server-snapshot`
+Коммит: `3e1781d`
 
-## 1) Инвентаризация БД/Compose
+## 1) Runtime status
 
-Команда:
 ```bash
 docker compose ps
 ```
-Вывод:
+
 ```text
-NAME                                         IMAGE                COMMAND                  SERVICE    CREATED              STATUS                        PORTS
-tutor-assistant-server-snapshot-postgres-1   postgres:16-alpine   "docker-entrypoint.s…"   postgres   About a minute ago   Up About a minute (healthy)   5432/tcp
-tutor-assistant-server-snapshot-redis-1      redis:7-alpine       "docker-entrypoint.s…"   redis      About a minute ago   Up About a minute (healthy)   6379/tcp
+NAME                                         IMAGE                                     COMMAND                  SERVICE    STATUS
+... backend ... worker ... postgres ... redis ... Up
 ```
 
-Команда:
+(На snapshot backend был поднят на host-port `18000`.)
+
+---
+
+## 2) Alembic / schema status
+
 ```bash
-docker compose run --rm backend alembic -c /app/alembic.ini current
+docker compose exec backend alembic -c /app/alembic.ini current
 ```
-Вывод:
-```text
-INFO  [alembic.runtime.migration] Context impl PostgresqlImpl.
-INFO  [alembic.runtime.migration] Will assume transactional DDL.
-```
-(текущая ревизия не показана, `alembic_version` отсутствует)
 
-Команда:
+```text
+20260224_0001 (head)
+```
+
+```bash
+docker compose exec backend alembic -c /app/alembic.ini check
+```
+
+```text
+No new upgrade operations detected.
+```
+
 ```bash
 docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "select version_num from alembic_version;"
 ```
-Вывод:
+
 ```text
-ERROR:  relation "alembic_version" does not exist
-LINE 1: select version_num from alembic_version;
-                                ^
+20260224_0001
 ```
 
-Команда:
+---
+
+## 3) Current canonical tables
+
 ```bash
-docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\\dt"
-```
-Вывод:
-```text
-Did not find any relations.
+docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
 ```
 
-Проверка таблиц:
+Список:
+- `alembic_version`
+- `tutors`
+- `students`
+- `tutor_student`
+- `invites`
+- `lessons`
+- `lesson_chunks`
+- `artifacts`
+
+---
+
+## 4) Critical constraints verified
+
+### tutor_student
+- composite PK `(tutor_id, student_id)`
+- `is_active` boolean
+
+### invites
+- `token` unique index
+- FK на `tutors` и `students`
+- `expires_at`, `used_at`
+
+### students
+- `tg_user_id` nullable
+- partial unique index `WHERE tg_user_id IS NOT NULL`
+
+---
+
+## 5) Runtime invariants
+- Runtime не содержит `create_all()`.
+- Webhook логирует metadata (`update_id`, type, `from_user_id`) без полного payload.
+- Invite onboarding реализован: `/start invite_<token>`.
+- `tutor_student` является источником истины для привязки tutor↔student.
+
+---
+
+## 6) Health
+
 ```bash
-\d students
-\d teachers
-\d tutors
-\d invites
-\d teacher_student
-```
-Результат: во всех случаях `Did not find any relation named ...`.
-
-## 2) ORM-модели (текущие)
-
-Ключевые факты из `tutor_assistant/models.py`:
-- есть `Tutor`/`Student`/`Lesson`/`LessonChunk`/`Artifact`
-- `Tutor.id` и `Student.id` сейчас `Integer`
-- ownership сейчас через `students.tutor_id`
-- `Invite` и `tutor_student/teacher_student` в ORM отсутствуют
-
-## 3) Где вызывается create_all
-
-Команда:
-```bash
-rg -n "create_all\\(" /Users/artur/Desktop/tutor-assistant-server-snapshot
-```
-Вывод:
-```text
-/Users/artur/Desktop/tutor-assistant-server-snapshot/tutor_assistant/database.py:27:    Base.metadata.create_all(bind=engine)
+curl http://localhost:18000/health
 ```
 
-## 4) Наблюдаемые расхождения
+```json
+{"status":"ok","postgres":true,"redis":true,"details":{}}
+```
 
-- Миграции в `alembic/versions` используют `teachers`/UUID и `teacher_student`, но runtime-модели используют `tutors`/int и `students.tutor_id`.
-- `/start invite_<token>` в bot runtime отсутствует.
-- Webhook логирует полный payload.
-- `backups/` попал в git-index.
+---
 
-## 5) Решение по данным (обязательный вопрос)
+## 7) Operational decision state
+Текущий rollout-подход: **RESET DB allowed** (только при явном подтверждении владельца данных).
 
-Решение: **данные не важны**.
+Production reset runbook:
+- `/opt/tutor-assistant/DEPLOY_RESET_DB.md`
 
-Выбранный подход: **reset DB + clean schema + clean migrations**.
+---
 
-Обоснование:
-- быстрее и безопаснее, чем конверсия int→UUID с промежуточной совместимостью;
-- устраняет исторические расхождения одним проходом;
-- снижает риск скрытых edge-case в миграциях переноса.
+## 8) Known limitations / next priorities
+- Добавить timezone-aware datetimes.
+- Добавить авто-тесты invite/permissions/queue.
+- Зафиксировать non-reset migration plan на случай, если data retention станет обязательной.

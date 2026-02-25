@@ -1,88 +1,143 @@
 # DEPLOY_RESET_DB
 
-Короткий runbook для деплоя в режиме **reset DB + clean migrations**.
+Final runbook для production rollout в сценарии **RESET DB + clean migrations**.
 
-Важно: применять только если подтверждено, что старые данные можно удалять.
+Использовать только если владелец системы явно подтвердил, что существующие данные можно удалить.
 
-## 1) Pre-check (обязательно)
+---
+
+## 1) Preconditions
 
 ```bash
 cd /opt/tutor-assistant
+git rev-parse --short HEAD
 docker compose ls
 docker compose ps
 docker compose config --services
 ```
 
 Проверь:
-- работаешь в нужном проекте;
-- нужные сервисы: `backend`, `worker`, `postgres`, `redis`.
+- ты в правильном каталоге (`/opt/tutor-assistant`),
+- сервисы compose корректные,
+- понимаешь текущий commit до деплоя.
 
-## 2) Backup вне git (даже если данных \"нет\")
+---
 
-### 2.1 Дамп БД
+## 2) Backup (обязателен даже при reset)
 
 ```bash
 cd /opt/tutor-assistant
 mkdir -p /opt/tutor-assistant-backups
 ts=$(date +%Y%m%d_%H%M%S)
-docker compose exec -T postgres pg_dump -U tutor_assistant -d tutor_assistant \
-  > /opt/tutor-assistant-backups/db_${ts}.sql
+project=${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}
 ```
 
-### 2.2 Backup тома данных уроков
+### 2.1 SQL dump
 
 ```bash
-cd /opt/tutor-assistant
-ts=$(date +%Y%m%d_%H%M%S)
-project=${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}
+docker compose exec -T postgres pg_dump -U tutor_assistant -d tutor_assistant \
+  > /opt/tutor-assistant-backups/db_${ts}.sql
+ls -lh /opt/tutor-assistant-backups/db_${ts}.sql
+```
+
+### 2.2 Volume backup: postgres_data
+
+```bash
+docker volume ls | grep "${project}_postgres_data"
+docker run --rm \
+  -v ${project}_postgres_data:/src:ro \
+  -v /opt/tutor-assistant-backups:/dst \
+  alpine sh -c "tar -czf /dst/postgres_data_${ts}.tar.gz -C /src ."
+ls -lh /opt/tutor-assistant-backups/postgres_data_${ts}.tar.gz
+```
+
+### 2.3 Volume backup: tutor_data
+
+```bash
 docker volume ls | grep "${project}_tutor_data"
 docker run --rm \
   -v ${project}_tutor_data:/src:ro \
   -v /opt/tutor-assistant-backups:/dst \
   alpine sh -c "tar -czf /dst/tutor_data_${ts}.tar.gz -C /src ."
+ls -lh /opt/tutor-assistant-backups/tutor_data_${ts}.tar.gz
 ```
 
-## 3) Reset БД и данных
+Сохрани пути backup-файлов в финальный отчёт.
+
+---
+
+## 3) Reset volumes + restart
 
 ```bash
 cd /opt/tutor-assistant
 docker compose down -v
 docker compose up -d postgres redis
 docker compose up -d backend worker
-docker compose exec backend alembic -c /app/alembic.ini upgrade head
 ```
 
-Примечание:
-- `down -v` удалит compose volumes (`postgres_data`, `tutor_data`) для текущего проекта.
+---
 
-## 4) Проверка после деплоя
+## 4) Migrations
 
 ```bash
-cd /opt/tutor-assistant
-docker compose ps
-docker compose logs --tail=80 backend
-docker compose logs --tail=80 worker
+docker compose exec backend alembic -c /app/alembic.ini upgrade head
 docker compose exec backend alembic -c /app/alembic.ini current
-docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "select version_num from alembic_version;"
-docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
+docker compose exec backend alembic -c /app/alembic.ini check
 ```
 
 Ожидаем:
-- ревизия `20260224_0001`;
-- таблицы: `tutors`, `students`, `tutor_student`, `invites`, `lessons`, `lesson_chunks`, `artifacts`, `alembic_version`.
+- `20260224_0001 (head)`
+- `No new upgrade operations detected.`
 
-## 5) Smoke onboarding invite
+---
+
+## 5) Schema verification
 
 ```bash
-cd /opt/tutor-assistant
+docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "select version_num from alembic_version;"
+docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
+docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\d tutor_student"
+docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\d invites"
+docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\d students"
+```
+
+Проверить обязательно:
+- PK `(tutor_id, student_id)` на `tutor_student`
+- unique `invites.token`
+- partial unique `students.tg_user_id where tg_user_id is not null`
+
+---
+
+## 6) App health
+
+```bash
+docker compose ps
+host_port=${HOST_PORT:-8000}
+curl -sS "http://localhost:${host_port}/health"
+docker compose logs --tail=80 backend
+docker compose logs --tail=80 worker
+```
+
+Ожидаем health:
+```json
+{"status":"ok","postgres":true,"redis":true,"details":{}}
+```
+
+---
+
+## 7) Invite smoke test
+
+### 7.1 Create invite token (DB-side smoke helper)
+
+```bash
 docker compose exec backend python - <<'PY'
 from datetime import datetime, timedelta
+import secrets
 from tutor_assistant.database import SessionLocal
 from tutor_assistant.models import Tutor, Invite
-import secrets
 
 with SessionLocal() as db:
-    tutor = Tutor(tg_user_id=999000111, tg_username="smoke_teacher", full_name="Smoke Teacher")
+    tutor = Tutor(tg_user_id=999000111, tg_username='smoke_teacher', full_name='Smoke Teacher')
     db.add(tutor)
     db.flush()
     token = secrets.token_urlsafe(16)
@@ -92,24 +147,59 @@ with SessionLocal() as db:
 PY
 ```
 
-Дальше в Telegram:
-- выполнить `/start invite_<token>`;
-- проверить связь:
+### 7.2 Claim in Telegram
+- выполнить `/start invite_<token>`
+- повторить тот же `/start invite_<token>`
+
+### 7.3 Verify DB link
 
 ```bash
 docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "select tutor_id, student_id, is_active from tutor_student;"
 ```
 
-## 6) Rollback (если нужно)
+Ожидаем:
+- первый claim: success,
+- второй claim: invite already used,
+- запись в `tutor_student` присутствует.
 
-1. Остановить сервисы:
+---
+
+## 8) Rollback
+
+Если rollout неуспешен:
+
 ```bash
 cd /opt/tutor-assistant
-docker compose down
+docker compose down -v
+# checkout previous known-good commit
+git checkout <old_commit>
+docker compose up -d
 ```
-2. Поднять postgres и восстановить дамп:
+
+Восстановление SQL:
 ```bash
-docker compose up -d postgres
 cat /opt/tutor-assistant-backups/db_<timestamp>.sql | docker compose exec -T postgres psql -U tutor_assistant -d tutor_assistant
 ```
-3. При необходимости восстановить `tutor_data` из `tar.gz` в соответствующий volume.
+
+Восстановление volume (пример postgres_data):
+```bash
+docker volume create ${project}_postgres_data
+docker run --rm \
+  -v ${project}_postgres_data:/dst \
+  -v /opt/tutor-assistant-backups:/src \
+  alpine sh -c "cd /dst && tar xzf /src/postgres_data_<timestamp>.tar.gz"
+```
+
+---
+
+## 9) Final report (обязательный)
+В отчёте указать:
+- deployed commit hash
+- backup paths
+- `docker compose ps`
+- alembic `current` + `check`
+- `alembic_version`
+- tables list (`\dt`)
+- health output
+- invite smoke result (first/second claim)
+- последние 80 строк backend/worker логов (или “no errors”).

@@ -1,8 +1,8 @@
 # Tutor Assistant MVP
 
 Docker Compose проект с сервисами:
-- `backend` (FastAPI)
-- `bot` (Telegram bot)
+- `backend` (FastAPI + Telegram webhook)
+- `bot` (Telegram polling, опционально для локальной разработки)
 - `worker` (очередь обработки уроков)
 - `postgres`
 - `redis`
@@ -37,7 +37,9 @@ docker compose up -d --build
 docker compose exec backend alembic -c /app/alembic.ini upgrade head
 ```
 
-Production reset deploy runbook: `DEPLOY_RESET_DB.md`.
+Runbooks:
+- reset deploy: `DEPLOY_RESET_DB.md`
+- state snapshot: `CURRENT_STATE.md`
 
 ## Проверка
 
@@ -61,6 +63,16 @@ curl http://localhost:${HOST_PORT:-8000}/health
 - `/add_student <имя> | <@username или telegram_id>`
 - `/lesson_now [student_uuid]`
 - `/create_invite [student_uuid]`
+
+## Каноничная схема (сейчас)
+- `tutors`
+- `students`
+- `tutor_student`
+- `invites`
+- `lessons`
+- `lesson_chunks`
+- `artifacts`
+- `alembic_version`
 
 ## Whisper (локально)
 - Worker использует `faster-whisper` на CPU и автоматически скачивает модель при первом запуске.

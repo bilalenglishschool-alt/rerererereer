@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
 from .config import get_settings
@@ -22,9 +22,8 @@ Base = declarative_base()
 
 
 def init_db() -> None:
-    from . import models  # noqa: F401
-
-    Base.metadata.create_all(bind=engine)
+    with engine.connect() as connection:
+        connection.execute(text("SELECT 1"))
 
 
 def get_db() -> Generator[Session, None, None]:

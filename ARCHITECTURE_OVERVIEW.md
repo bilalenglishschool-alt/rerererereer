@@ -93,6 +93,7 @@ Retry/failure policy:
 - `lesson_metrics:task_failures_total`
 - `lesson_metrics:worker_failures` (ZSET, для окна 10 минут)
 - endpoint `GET /metrics/worker`
+- alert endpoint `GET /alerts/worker` (сравнение с threshold из env)
 
 ## 7) Безопасность
 - В webhook логах нет полного payload.

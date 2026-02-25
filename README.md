@@ -26,6 +26,8 @@ Docker Compose проект с сервисами:
 - `WHISPER_MODEL` (`base` по умолчанию, можно `small`)
 - `TRANSCRIPTION_RETENTION_DAYS` (по умолчанию `14`)
 - `TRANSCRIPTION_CLEANUP_INTERVAL_SECONDS` (по умолчанию `600`)
+- `WORKER_ALERT_ERRORS_LAST_10M_THRESHOLD` (по умолчанию `0`)
+- `WORKER_ALERT_DEAD_LETTER_THRESHOLD` (по умолчанию `0`)
 - `POSTGRES_DB`
 - `POSTGRES_USER`
 - `POSTGRES_PASSWORD`
@@ -157,3 +159,4 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
 - Dead-letter queue: `lesson_tasks:dead`
 - HTTP endpoint:
   - `GET /metrics/worker`
+  - `GET /alerts/worker`

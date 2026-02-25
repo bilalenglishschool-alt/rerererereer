@@ -283,6 +283,44 @@ async def read_upload_limited(audio: UploadFile, max_bytes: int) -> bytes:
     return payload
 
 
+def collect_worker_metrics(redis_client) -> dict[str, int]:
+    now_ts = int(time.time())
+    ten_minutes_ago = now_ts - 600
+
+    return {
+        "tasks_processed_total": int(redis_client.get(WORKER_METRIC_TASKS_PROCESSED_KEY) or 0),
+        "task_failures_total": int(redis_client.get(WORKER_METRIC_TASKS_FAILED_KEY) or 0),
+        "worker_errors_last_10m": int(
+            redis_client.zcount(WORKER_FAILURE_EVENTS_ZSET_KEY, ten_minutes_ago, now_ts)
+        ),
+        "queue_depth": int(redis_client.llen(LESSON_QUEUE_NAME)),
+        "processing_depth": int(redis_client.llen(LESSON_PROCESSING_QUEUE_NAME)),
+        "dead_letter_depth": int(redis_client.llen(LESSON_DEAD_LETTER_QUEUE_NAME)),
+    }
+
+
+def evaluate_worker_alerts(metrics: dict[str, int]) -> list[str]:
+    alerts: list[str] = []
+    error_threshold = int(settings.worker_alert_errors_last_10m_threshold)
+    dead_letter_threshold = int(settings.worker_alert_dead_letter_threshold)
+
+    errors_last_10m = int(metrics.get("worker_errors_last_10m", 0))
+    dead_letter_depth = int(metrics.get("dead_letter_depth", 0))
+
+    if errors_last_10m > error_threshold:
+        alerts.append(
+            "worker_errors_last_10m exceeded threshold: "
+            f"{errors_last_10m} > {error_threshold}"
+        )
+    if dead_letter_depth > dead_letter_threshold:
+        alerts.append(
+            "dead_letter_depth exceeded threshold: "
+            f"{dead_letter_depth} > {dead_letter_threshold}"
+        )
+
+    return alerts
+
+
 @app.get("/health")
 def health(db: Session = Depends(get_db)) -> dict:
     postgres_ok = False
@@ -316,25 +354,34 @@ def health(db: Session = Depends(get_db)) -> dict:
 def worker_metrics() -> dict:
     redis_client = get_redis_client(settings)
     try:
-        now_ts = int(time.time())
-        ten_minutes_ago = now_ts - 600
-
-        processed_total = int(redis_client.get(WORKER_METRIC_TASKS_PROCESSED_KEY) or 0)
-        failed_total = int(redis_client.get(WORKER_METRIC_TASKS_FAILED_KEY) or 0)
-        failures_last_10m = int(
-            redis_client.zcount(WORKER_FAILURE_EVENTS_ZSET_KEY, ten_minutes_ago, now_ts)
-        )
-
-        return {
-            "tasks_processed_total": processed_total,
-            "task_failures_total": failed_total,
-            "worker_errors_last_10m": failures_last_10m,
-            "queue_depth": int(redis_client.llen(LESSON_QUEUE_NAME)),
-            "processing_depth": int(redis_client.llen(LESSON_PROCESSING_QUEUE_NAME)),
-            "dead_letter_depth": int(redis_client.llen(LESSON_DEAD_LETTER_QUEUE_NAME)),
-        }
+        return collect_worker_metrics(redis_client)
     finally:
         redis_client.close()
+
+
+@app.get("/alerts/worker")
+def worker_alerts() -> dict:
+    redis_client = None
+    try:
+        redis_client = get_redis_client(settings)
+        metrics = collect_worker_metrics(redis_client)
+        alerts = evaluate_worker_alerts(metrics)
+        return {
+            "status": "alert" if alerts else "ok",
+            "alerts": alerts,
+            "thresholds": {
+                "worker_errors_last_10m": int(settings.worker_alert_errors_last_10m_threshold),
+                "dead_letter_depth": int(settings.worker_alert_dead_letter_threshold),
+            },
+            "metrics": metrics,
+        }
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail=f"Failed to read worker metrics: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"Failed to read worker metrics: {exc}") from exc
+    finally:
+        if redis_client is not None:
+            redis_client.close()
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -122,6 +122,7 @@ docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
   - transcription-job использует ту же retry/dead-letter политику
 - Worker metrics endpoint:
   - `GET /metrics/worker`
+  - `GET /alerts/worker`
   - fields: `tasks_processed_total`, `task_failures_total`, `worker_errors_last_10m`,
     `queue_depth`, `processing_depth`, `dead_letter_depth`
 

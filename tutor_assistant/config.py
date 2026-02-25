@@ -18,6 +18,8 @@ class Settings:
     redis_url: str
     transcription_retention_days: int
     transcription_cleanup_interval_seconds: int
+    worker_alert_errors_last_10m_threshold: int
+    worker_alert_dead_letter_threshold: int
 
 
 def _parse_positive_int(raw_value: str, default: int, minimum: int) -> int:
@@ -56,6 +58,16 @@ def get_settings() -> Settings:
         default=600,
         minimum=30,
     )
+    worker_alert_errors_last_10m_threshold = _parse_positive_int(
+        os.getenv("WORKER_ALERT_ERRORS_LAST_10M_THRESHOLD", "0"),
+        default=0,
+        minimum=0,
+    )
+    worker_alert_dead_letter_threshold = _parse_positive_int(
+        os.getenv("WORKER_ALERT_DEAD_LETTER_THRESHOLD", "0"),
+        default=0,
+        minimum=0,
+    )
 
     return Settings(
         bot_token=os.getenv("BOT_TOKEN", "").strip(),
@@ -68,4 +80,6 @@ def get_settings() -> Settings:
         redis_url=redis_url,
         transcription_retention_days=transcription_retention_days,
         transcription_cleanup_interval_seconds=transcription_cleanup_interval_seconds,
+        worker_alert_errors_last_10m_threshold=worker_alert_errors_last_10m_threshold,
+        worker_alert_dead_letter_threshold=worker_alert_dead_letter_threshold,
     )

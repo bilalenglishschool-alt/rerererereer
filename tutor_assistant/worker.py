@@ -13,9 +13,12 @@ from .database import SessionLocal, init_db
 from .drafts import TRANSCRIPTION_FAILED_TEXT, generate_draft, transcribe_audio
 from .models import Artifact, Lesson, LessonChunk
 from .queue import (
+    TASK_GENERATE_ARTIFACTS,
+    TASK_PROCESS_AUDIO,
     ack_task,
     acquire_lesson_lock,
     get_redis_client,
+    parse_task,
     release_lesson_lock,
     requeue_task,
     reserve_task,
@@ -30,7 +33,13 @@ settings = get_settings()
 MAX_ATTEMPTS = 3
 
 
-def upsert_artifact(db, lesson_id: str, kind: str, path: str) -> None:
+def upsert_artifact(
+    db,
+    lesson_id: str,
+    kind: str,
+    path: str | None = None,
+    content: str | None = None,
+) -> None:
     artifact = (
         db.query(Artifact)
         .filter(Artifact.lesson_id == lesson_id, Artifact.kind == kind)
@@ -38,12 +47,20 @@ def upsert_artifact(db, lesson_id: str, kind: str, path: str) -> None:
     )
     if artifact:
         artifact.path = path
+        artifact.content = content
         return
 
-    db.add(Artifact(lesson_id=lesson_id, kind=kind, path=path))
+    db.add(
+        Artifact(
+            lesson_id=lesson_id,
+            kind=kind,
+            path=path,
+            content=content,
+        )
+    )
 
 
-def process_lesson(lesson_id: str) -> None:
+def process_audio_lesson(lesson_id: str) -> None:
     with SessionLocal() as db:
         lesson = (
             db.query(Lesson)
@@ -72,7 +89,10 @@ def process_lesson(lesson_id: str) -> None:
 
         chunks = (
             db.query(LessonChunk)
-            .filter(LessonChunk.lesson_id == lesson.id)
+            .filter(
+                LessonChunk.lesson_id == lesson.id,
+                LessonChunk.path.isnot(None),
+            )
             .order_by(LessonChunk.seq.asc())
             .all()
         )
@@ -160,6 +180,77 @@ def process_lesson(lesson_id: str) -> None:
                     db.commit()
 
 
+def process_generate_artifacts(lesson_id: str) -> None:
+    with SessionLocal() as db:
+        lesson = (
+            db.query(Lesson)
+            .filter(Lesson.id == lesson_id)
+            .with_for_update()
+            .first()
+        )
+        if not lesson:
+            logger.warning("Lesson %s was not found", lesson_id)
+            return
+
+        if lesson.status == "sent":
+            logger.info("Lesson %s already sent, skipping", lesson_id)
+            return
+
+        if lesson.status == "draft_ready":
+            logger.info("Lesson %s already has draft_ready status, skipping", lesson_id)
+            return
+
+        if lesson.status != "processing":
+            raise RuntimeError(
+                f"Lesson {lesson.id} has invalid status for generate_artifacts: {lesson.status}"
+            )
+
+        lesson.processing_status = "processing"
+        lesson.processing_attempts = (lesson.processing_attempts or 0) + 1
+        lesson.processing_error = None
+        db.commit()
+
+    with SessionLocal() as db:
+        lesson = db.query(Lesson).filter(Lesson.id == lesson_id).first()
+        if not lesson:
+            logger.warning("Lesson %s disappeared during generate_artifacts", lesson_id)
+            return
+
+        chunks = (
+            db.query(LessonChunk)
+            .filter(LessonChunk.lesson_id == lesson.id)
+            .order_by(LessonChunk.seq.asc())
+            .all()
+        )
+        chunk_texts = [
+            (chunk.content or "").strip()
+            for chunk in chunks
+            if (chunk.content or "").strip()
+        ]
+        if not chunk_texts:
+            lesson.processing_status = "failed"
+            lesson.processing_error = "No text chunks uploaded"
+            db.commit()
+            raise RuntimeError(f"No text chunks uploaded for lesson {lesson.id}")
+
+        summary = "\n".join(chunk_texts)
+        homework = "MVP stub homework: repeat key points and send 3 practice examples."
+        difficulties = "MVP stub: discuss unclear points during the next lesson."
+
+        lesson.transcript_text = summary
+        lesson.draft_summary = summary
+        lesson.draft_difficulties = difficulties
+        lesson.draft_homework = homework
+        lesson.status = "draft_ready"
+        lesson.processed_at = datetime.utcnow()
+        lesson.processing_status = "done"
+        lesson.processing_error = None
+
+        upsert_artifact(db, lesson.id, "summary", content=summary)
+        upsert_artifact(db, lesson.id, "homework", content=homework)
+        db.commit()
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     init_db()
@@ -174,8 +265,12 @@ def main() -> None:
         if not raw_task:
             continue
 
-        lesson_id = str(raw_task).strip()
+        task_type, lesson_id = parse_task(raw_task)
         if not lesson_id:
+            ack_task(redis_client, raw_task)
+            continue
+        if task_type not in {TASK_GENERATE_ARTIFACTS, TASK_PROCESS_AUDIO}:
+            logger.error("Unknown task_type=%s for lesson %s, dropping task", task_type, lesson_id)
             ack_task(redis_client, raw_task)
             continue
 
@@ -187,7 +282,10 @@ def main() -> None:
             continue
 
         try:
-            process_lesson(lesson_id)
+            if task_type == TASK_GENERATE_ARTIFACTS:
+                process_generate_artifacts(lesson_id)
+            else:
+                process_audio_lesson(lesson_id)
             ack_task(redis_client, raw_task)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Worker failed for lesson %s", lesson_id)

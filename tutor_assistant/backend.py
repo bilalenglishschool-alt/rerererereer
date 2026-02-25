@@ -89,7 +89,14 @@ def get_lesson_by_token(db: Session, lesson_id: str, token: str) -> Lesson | Non
 
 
 def count_lesson_chunks(db: Session, lesson_id: str) -> int:
-    return db.query(LessonChunk).filter(LessonChunk.lesson_id == lesson_id).count()
+    return (
+        db.query(LessonChunk)
+        .filter(
+            LessonChunk.lesson_id == lesson_id,
+            LessonChunk.path.isnot(None),
+        )
+        .count()
+    )
 
 
 def enqueue_lesson_job(lesson_id: str) -> None:

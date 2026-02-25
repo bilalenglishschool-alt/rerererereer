@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from redis import Redis
 
 from .config import Settings
@@ -7,14 +9,46 @@ from .config import Settings
 LESSON_QUEUE_NAME = "lesson_tasks"
 LESSON_PROCESSING_QUEUE_NAME = "lesson_tasks:processing"
 LESSON_LOCK_PREFIX = "lesson_task:lock:"
+TASK_PROCESS_AUDIO = "process_audio_lesson"
+TASK_GENERATE_ARTIFACTS = "generate_artifacts"
 
 
 def get_redis_client(settings: Settings) -> Redis:
     return Redis.from_url(settings.redis_url, decode_responses=True)
 
 
-def enqueue_process_lesson(redis_client: Redis, lesson_id: str) -> None:
-    redis_client.lpush(LESSON_QUEUE_NAME, lesson_id)
+def enqueue_process_lesson(
+    redis_client: Redis,
+    lesson_id: str,
+    task_type: str = TASK_PROCESS_AUDIO,
+) -> None:
+    payload = json.dumps(
+        {
+            "task_type": task_type,
+            "lesson_id": lesson_id,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    redis_client.lpush(LESSON_QUEUE_NAME, payload)
+
+
+def parse_task(raw_task: str) -> tuple[str, str]:
+    task = str(raw_task).strip()
+    if not task:
+        return "", ""
+
+    try:
+        data = json.loads(task)
+    except json.JSONDecodeError:
+        return TASK_PROCESS_AUDIO, task
+
+    if not isinstance(data, dict):
+        return TASK_PROCESS_AUDIO, task
+
+    lesson_id = str(data.get("lesson_id", "")).strip()
+    task_type = str(data.get("task_type", "")).strip() or TASK_PROCESS_AUDIO
+    return task_type, lesson_id
 
 
 def reserve_task(redis_client: Redis, timeout_seconds: int = 5) -> str | None:

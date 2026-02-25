@@ -93,6 +93,10 @@ curl http://localhost:${HOST_PORT:-8000}/health
 5. Статус/результат доступен через `GET /api/transcribe/jobs/{job_id}`.
 6. При статусе `failed` можно выполнить `POST /api/transcribe/jobs/{job_id}/retry`.
 
+Защита загрузки:
+- допустимые расширения: `.webm, .mp3, .wav, .m4a, .ogg, .flac, .aac, .mp4`
+- лимит размера файла: `25 MB`
+
 ## Каноничная схема
 Таблицы:
 - `tutors`

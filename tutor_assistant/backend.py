@@ -34,6 +34,32 @@ settings = get_settings()
 
 app = FastAPI(title="Tutor Assistant MVP")
 
+TRANSCRIPTION_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+TRANSCRIPTION_ALLOWED_EXTENSIONS = {
+    ".aac",
+    ".flac",
+    ".m4a",
+    ".mp3",
+    ".mp4",
+    ".ogg",
+    ".wav",
+    ".webm",
+}
+TRANSCRIPTION_ALLOWED_CONTENT_TYPES = {
+    "audio/aac",
+    "audio/flac",
+    "audio/m4a",
+    "audio/mp3",
+    "audio/mp4",
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/wav",
+    "audio/webm",
+    "audio/x-m4a",
+    "audio/x-wav",
+    "video/webm",
+}
+
 
 def _extract_webhook_meta(update: object) -> tuple[object, str, object]:
     if not isinstance(update, dict):
@@ -146,6 +172,64 @@ def serialize_transcription_job(job: TranscriptionJob) -> dict:
     }
 
 
+def format_megabytes(size_bytes: int) -> str:
+    mb_value = size_bytes / (1024 * 1024)
+    if mb_value.is_integer():
+        return str(int(mb_value))
+    return f"{mb_value:.1f}"
+
+
+def validate_transcription_upload_meta(audio: UploadFile) -> str:
+    filename = (audio.filename or "").strip()
+    suffix = Path(filename).suffix.lower()
+    content_type = (audio.content_type or "").split(";", 1)[0].strip().lower()
+
+    if suffix and suffix not in TRANSCRIPTION_ALLOWED_EXTENSIONS:
+        allowed = ", ".join(sorted(TRANSCRIPTION_ALLOWED_EXTENSIONS))
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported file extension: {suffix}. Allowed: {allowed}",
+        )
+
+    if content_type and not (
+        content_type in TRANSCRIPTION_ALLOWED_CONTENT_TYPES
+        or content_type.startswith("audio/")
+    ):
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported content_type: {content_type}",
+        )
+
+    if suffix:
+        return suffix
+    if content_type == "video/webm":
+        return ".webm"
+    return ".wav"
+
+
+async def read_upload_limited(audio: UploadFile, max_bytes: int) -> bytes:
+    chunks: list[bytes] = []
+    total_size = 0
+
+    while True:
+        chunk = await audio.read(1024 * 1024)
+        if not chunk:
+            break
+        total_size += len(chunk)
+        if total_size > max_bytes:
+            max_mb = format_megabytes(max_bytes)
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Max size: {max_mb} MB",
+            )
+        chunks.append(chunk)
+
+    payload = b"".join(chunks)
+    if not payload:
+        raise HTTPException(status_code=400, detail="Empty audio file")
+    return payload
+
+
 @app.get("/health")
 def health(db: Session = Depends(get_db)) -> dict:
     postgres_ok = False
@@ -215,12 +299,10 @@ async def create_transcription_job(
     audio: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> dict:
-    payload = await audio.read()
-    if not payload:
-        raise HTTPException(status_code=400, detail="Empty audio file")
+    suffix = validate_transcription_upload_meta(audio)
+    payload = await read_upload_limited(audio, TRANSCRIPTION_MAX_UPLOAD_BYTES)
 
     job_uuid = uuid4()
-    suffix = Path(audio.filename or "").suffix.lower() if audio.filename else ".webm"
     source_path = write_transcription_source(
         settings=settings,
         job_id=str(job_uuid),

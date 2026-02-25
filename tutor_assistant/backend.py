@@ -19,6 +19,8 @@ from .queue import (
     LESSON_DEAD_LETTER_QUEUE_NAME,
     LESSON_PROCESSING_QUEUE_NAME,
     LESSON_QUEUE_NAME,
+    TASK_GENERATE_ARTIFACTS,
+    TASK_PROCESS_AUDIO,
     TASK_TRANSCRIBE_JOB,
     WORKER_FAILURE_EVENTS_ZSET_KEY,
     WORKER_METRIC_PROCESSING_DURATION_LAST_MS_KEY,
@@ -156,6 +158,11 @@ WORKER_PROMETHEUS_METRICS: tuple[tuple[str, str, str, str], ...] = (
         "gauge",
         "Age of latest worker heartbeat in seconds.",
     ),
+)
+WORKER_KNOWN_TASK_TYPES: tuple[str, ...] = (
+    TASK_PROCESS_AUDIO,
+    TASK_GENERATE_ARTIFACTS,
+    TASK_TRANSCRIBE_JOB,
 )
 
 
@@ -382,7 +389,14 @@ async def read_upload_limited(audio: UploadFile, max_bytes: int) -> bytes:
     return payload
 
 
-def collect_worker_metrics(redis_client) -> dict[str, int | float]:
+def collect_task_type_counters(redis_client, base_key: str) -> dict[str, int]:
+    return {
+        task_type: int(redis_client.get(f"{base_key}:{task_type}") or 0)
+        for task_type in WORKER_KNOWN_TASK_TYPES
+    }
+
+
+def collect_worker_metrics(redis_client) -> dict[str, int | float | dict[str, int]]:
     now_ts = int(time.time())
     ten_minutes_ago = now_ts - 600
 
@@ -392,6 +406,14 @@ def collect_worker_metrics(redis_client) -> dict[str, int | float]:
     processing_duration_samples = int(redis_client.get(WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY) or 0)
     heartbeat_ts = int(redis_client.get(WORKER_METRIC_HEARTBEAT_TS_KEY) or 0)
     heartbeat_age_seconds = max(0, now_ts - heartbeat_ts) if heartbeat_ts > 0 else -1
+    tasks_processed_by_type = collect_task_type_counters(
+        redis_client,
+        WORKER_METRIC_TASKS_PROCESSED_KEY,
+    )
+    task_failures_by_type = collect_task_type_counters(
+        redis_client,
+        WORKER_METRIC_TASKS_FAILED_KEY,
+    )
 
     return {
         "tasks_processed_total": int(redis_client.get(WORKER_METRIC_TASKS_PROCESSED_KEY) or 0),
@@ -420,10 +442,12 @@ def collect_worker_metrics(redis_client) -> dict[str, int | float]:
         ),
         "worker_heartbeat_ts": heartbeat_ts,
         "worker_heartbeat_age_seconds": heartbeat_age_seconds,
+        "tasks_processed_by_type": tasks_processed_by_type,
+        "task_failures_by_type": task_failures_by_type,
     }
 
 
-def render_worker_metrics_prometheus(metrics: dict[str, int | float]) -> str:
+def render_worker_metrics_prometheus(metrics: dict[str, int | float | dict[str, int]]) -> str:
     lines: list[str] = []
 
     for field_name, metric_name, metric_type, metric_help in WORKER_PROMETHEUS_METRICS:
@@ -439,11 +463,40 @@ def render_worker_metrics_prometheus(metrics: dict[str, int | float]) -> str:
         lines.append(f"# TYPE {metric_name} {metric_type}")
         lines.append(f"{metric_name} {metric_value}")
 
+    tasks_processed_by_type = metrics.get("tasks_processed_by_type", {})
+    task_failures_by_type = metrics.get("task_failures_by_type", {})
+    if not isinstance(tasks_processed_by_type, dict):
+        tasks_processed_by_type = {}
+    if not isinstance(task_failures_by_type, dict):
+        task_failures_by_type = {}
+
+    lines.append(
+        "# HELP tutor_assistant_worker_tasks_processed_by_type_total "
+        "Total number of processed worker tasks by task type."
+    )
+    lines.append("# TYPE tutor_assistant_worker_tasks_processed_by_type_total counter")
+    for task_type in WORKER_KNOWN_TASK_TYPES:
+        lines.append(
+            "tutor_assistant_worker_tasks_processed_by_type_total"
+            f'{{task_type="{task_type}"}} {int(tasks_processed_by_type.get(task_type, 0))}'
+        )
+
+    lines.append(
+        "# HELP tutor_assistant_worker_task_failures_by_type_total "
+        "Total number of failed worker tasks by task type."
+    )
+    lines.append("# TYPE tutor_assistant_worker_task_failures_by_type_total counter")
+    for task_type in WORKER_KNOWN_TASK_TYPES:
+        lines.append(
+            "tutor_assistant_worker_task_failures_by_type_total"
+            f'{{task_type="{task_type}"}} {int(task_failures_by_type.get(task_type, 0))}'
+        )
+
     lines.append("")
     return "\n".join(lines)
 
 
-def evaluate_worker_alerts(metrics: dict[str, int | float]) -> list[str]:
+def evaluate_worker_alerts(metrics: dict[str, int | float | dict[str, int]]) -> list[str]:
     alerts: list[str] = []
     error_threshold = int(settings.worker_alert_errors_last_10m_threshold)
     dead_letter_threshold = int(settings.worker_alert_dead_letter_threshold)
@@ -481,7 +534,7 @@ def evaluate_worker_alerts(metrics: dict[str, int | float]) -> list[str]:
     return alerts
 
 
-def load_worker_metrics_or_503() -> dict[str, int | float]:
+def load_worker_metrics_or_503() -> dict[str, int | float | dict[str, int]]:
     redis_client = None
     try:
         redis_client = get_redis_client(settings)

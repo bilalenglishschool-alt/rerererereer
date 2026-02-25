@@ -129,8 +129,10 @@ docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
   - fields: `tasks_processed_total`, `task_failures_total`, `worker_errors_last_10m`,
     `queue_depth`, `processing_depth`, `dead_letter_depth`,
     `queue_latency_ms_last/max/avg`, `processing_duration_ms_last/max/avg`,
-    `worker_heartbeat_ts`, `worker_heartbeat_age_seconds`
+    `worker_heartbeat_ts`, `worker_heartbeat_age_seconds`,
+    `tasks_processed_by_type`, `task_failures_by_type`
   - Prometheus format: text `version=0.0.4`
+  - Prometheus includes labeled counters by `task_type`
 - External monitor helper:
   - `python -m tutor_assistant.ops.check_worker_alerts`
   - scheduled workflow `.github/workflows/worker-alert-monitor.yml` (needs `WORKER_ALERT_URL` secret)

@@ -36,7 +36,7 @@ jobs:
           --health-retries 20
 
     env:
-      BOT_TOKEN: ci-test-token
+      BOT_TOKEN: 123456:ABCDEFghijklmnopqrstuvwxyz_1234567890
       BASE_URL: http://localhost:8000
       STORAGE_PATH: ${{ github.workspace }}/.ci-data
       LLM_PROVIDER: none

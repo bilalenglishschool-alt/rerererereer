@@ -20,6 +20,7 @@ class Settings:
     transcription_cleanup_interval_seconds: int
     worker_alert_errors_last_10m_threshold: int
     worker_alert_dead_letter_threshold: int
+    worker_alert_queue_depth_threshold: int
 
 
 def _parse_positive_int(raw_value: str, default: int, minimum: int) -> int:
@@ -68,6 +69,11 @@ def get_settings() -> Settings:
         default=0,
         minimum=0,
     )
+    worker_alert_queue_depth_threshold = _parse_positive_int(
+        os.getenv("WORKER_ALERT_QUEUE_DEPTH_THRESHOLD", "20"),
+        default=20,
+        minimum=0,
+    )
 
     return Settings(
         bot_token=os.getenv("BOT_TOKEN", "").strip(),
@@ -82,4 +88,5 @@ def get_settings() -> Settings:
         transcription_cleanup_interval_seconds=transcription_cleanup_interval_seconds,
         worker_alert_errors_last_10m_threshold=worker_alert_errors_last_10m_threshold,
         worker_alert_dead_letter_threshold=worker_alert_dead_letter_threshold,
+        worker_alert_queue_depth_threshold=worker_alert_queue_depth_threshold,
     )

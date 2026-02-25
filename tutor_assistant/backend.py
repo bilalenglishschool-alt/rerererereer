@@ -335,9 +335,11 @@ def evaluate_worker_alerts(metrics: dict[str, int | float]) -> list[str]:
     alerts: list[str] = []
     error_threshold = int(settings.worker_alert_errors_last_10m_threshold)
     dead_letter_threshold = int(settings.worker_alert_dead_letter_threshold)
+    queue_depth_threshold = int(settings.worker_alert_queue_depth_threshold)
 
     errors_last_10m = int(metrics.get("worker_errors_last_10m", 0))
     dead_letter_depth = int(metrics.get("dead_letter_depth", 0))
+    queue_depth = int(metrics.get("queue_depth", 0))
 
     if errors_last_10m > error_threshold:
         alerts.append(
@@ -348,6 +350,11 @@ def evaluate_worker_alerts(metrics: dict[str, int | float]) -> list[str]:
         alerts.append(
             "dead_letter_depth exceeded threshold: "
             f"{dead_letter_depth} > {dead_letter_threshold}"
+        )
+    if queue_depth > queue_depth_threshold:
+        alerts.append(
+            "queue_depth exceeded threshold: "
+            f"{queue_depth} > {queue_depth_threshold}"
         )
 
     return alerts
@@ -404,6 +411,7 @@ def worker_alerts() -> dict:
             "thresholds": {
                 "worker_errors_last_10m": int(settings.worker_alert_errors_last_10m_threshold),
                 "dead_letter_depth": int(settings.worker_alert_dead_letter_threshold),
+                "queue_depth": int(settings.worker_alert_queue_depth_threshold),
             },
             "metrics": metrics,
         }

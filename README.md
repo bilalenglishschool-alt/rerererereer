@@ -20,6 +20,8 @@ Docker Compose проект с сервисами:
 - `STORAGE_PATH`
 - `LLM_PROVIDER`
 - `LLM_API_KEY`
+- `OPENAI_API_KEY` (используется как fallback, если `LLM_API_KEY` пустой)
+- `OPENAI_MODEL` (по умолчанию `gpt-4o-mini`)
 - `WHISPER_MODEL` (`base` по умолчанию, можно `small`)
 - `POSTGRES_DB`
 - `POSTGRES_USER`
@@ -77,7 +79,7 @@ curl http://localhost:${HOST_PORT:-8000}/health
 1. `/lesson_start <student_uuid>` создаёт lesson со статусом `in_progress`.
 2. `/lesson_add <text>` добавляет текстовые chunks в `lesson_chunks.content`.
 3. `/lesson_finish` переводит lesson в `processing` и ставит задачу `generate_artifacts`.
-4. Worker создаёт stub-артефакты (`summary`, `homework`) и переводит lesson в `draft_ready`.
+4. Worker генерирует `summary/difficulties/homework` через LLM (или fallback) и переводит lesson в `draft_ready`.
 5. `/lesson_send` отправляет summary ученику и переводит lesson в `sent` (`sent_at` заполняется).
 
 Строгий порядок для text-flow: `in_progress -> processing -> draft_ready -> sent`.

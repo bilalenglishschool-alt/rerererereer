@@ -233,11 +233,16 @@ def process_generate_artifacts(lesson_id: str) -> None:
             db.commit()
             raise RuntimeError(f"No text chunks uploaded for lesson {lesson.id}")
 
-        summary = "\n".join(chunk_texts)
-        homework = "MVP stub homework: repeat key points and send 3 practice examples."
-        difficulties = "MVP stub: discuss unclear points during the next lesson."
+        transcript = "\n".join(chunk_texts)
+        draft = generate_draft(transcript, settings.llm_provider)
+        summary = (draft.get("summary") or "").strip()
+        difficulties = (draft.get("difficulties") or "").strip()
+        homework = (draft.get("homework") or "").strip()
 
-        lesson.transcript_text = summary
+        if not summary:
+            summary = transcript
+
+        lesson.transcript_text = transcript
         lesson.draft_summary = summary
         lesson.draft_difficulties = difficulties
         lesson.draft_homework = homework
@@ -247,6 +252,7 @@ def process_generate_artifacts(lesson_id: str) -> None:
         lesson.processing_error = None
 
         upsert_artifact(db, lesson.id, "summary", content=summary)
+        upsert_artifact(db, lesson.id, "difficulties", content=difficulties)
         upsert_artifact(db, lesson.id, "homework", content=homework)
         db.commit()
 

@@ -31,9 +31,8 @@
 - `artifacts` поддерживает file (`path`) и text (`content`).
 
 ## Ограничения MVP
-- Для text flow используется stub-обработка (без LLM).
-- Summary = конкатенация chunks.
-- Homework = статический placeholder.
+- LLM зависит от конфигурации (`LLM_PROVIDER=openai` + API key).
+- При недоступном LLM включается безопасный fallback без падения worker.
 
 ## Где смотреть
 - Архитектура: `ARCHITECTURE_OVERVIEW.md`
@@ -45,4 +44,4 @@
 1. Добавить авто-тесты на lifecycle и permission checks.
 2. Добавить monitoring/metrics по queue latency и fail-rate.
 3. Уточнить стратегию non-reset migrations для будущего прод-retention.
-4. По готовности подключить LLM генерацию вместо stub для text flow.
+4. Улучшить prompt/валидацию LLM-ответа и добавить retry-policy для провайдера.

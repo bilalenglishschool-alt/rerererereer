@@ -48,7 +48,7 @@
 1. `/lesson_start <student_uuid>` -> `status=in_progress`.
 2. `/lesson_add <text>` -> запись в `lesson_chunks.content`.
 3. `/lesson_finish` -> `status=processing`, enqueue `generate_artifacts`.
-4. Worker stub: summary/homework, `status=draft_ready`.
+4. Worker: LLM draft generation (`summary/difficulties/homework`) или fallback, `status=draft_ready`.
 5. `/lesson_send` -> отправка student, `status=sent`, `sent_at`.
 
 ## 5) Queue протокол

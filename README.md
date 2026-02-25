@@ -181,6 +181,7 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
 - Dead-letter queue: `lesson_tasks:dead`
 - HTTP endpoint:
   - `GET /metrics/worker`
+  - `GET /metrics/worker/prometheus`
   - `GET /alerts/worker`
   - `/alerts/worker` thresholds:
     - `worker_errors_last_10m`
@@ -191,6 +192,9 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
     - `queue_depth`, `processing_depth`, `dead_letter_depth`
     - `queue_latency_ms_last`, `queue_latency_ms_max`, `queue_latency_ms_avg`
     - `processing_duration_ms_last`, `processing_duration_ms_max`, `processing_duration_ms_avg`
+  - `/metrics/worker/prometheus`:
+    - text format `text/plain; version=0.0.4`
+    - ready for Prometheus scrape
 - External alert check script:
   - `python -m tutor_assistant.ops.check_worker_alerts`
   - env:

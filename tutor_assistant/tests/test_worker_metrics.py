@@ -114,6 +114,54 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["processing_duration_ms_avg"], 0.0)
         self.assertTrue(redis_stub.closed)
 
+    def test_prometheus_metrics_endpoint_returns_text_payload(self) -> None:
+        redis_stub = _MetricsRedisStub(
+            values={
+                WORKER_METRIC_TASKS_PROCESSED_KEY: 44,
+                WORKER_METRIC_TASKS_FAILED_KEY: 3,
+                WORKER_FAILURE_EVENTS_ZSET_KEY: 2,
+                WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY: 50,
+                WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY: 120,
+                WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY: 210,
+                WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY: 3,
+                WORKER_METRIC_PROCESSING_DURATION_LAST_MS_KEY: 180,
+                WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY: 250,
+                WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY: 301,
+                WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY: 2,
+            },
+            queue_depth=4,
+            processing_depth=1,
+            dead_letter_depth=0,
+        )
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                response = client.get("/metrics/worker/prometheus")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/plain", response.headers.get("content-type", ""))
+        body = response.text
+        self.assertIn(
+            "tutor_assistant_worker_tasks_processed_total 44",
+            body,
+        )
+        self.assertIn(
+            "tutor_assistant_worker_task_failures_total 3",
+            body,
+        )
+        self.assertIn(
+            "tutor_assistant_worker_queue_depth 4",
+            body,
+        )
+        self.assertIn(
+            "tutor_assistant_worker_queue_latency_ms_avg 70.0",
+            body,
+        )
+        self.assertIn(
+            "tutor_assistant_worker_processing_duration_ms_avg 150.5",
+            body,
+        )
+        self.assertTrue(redis_stub.closed)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

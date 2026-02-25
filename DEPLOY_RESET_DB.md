@@ -86,7 +86,7 @@ docker compose exec backend alembic -c /app/alembic.ini check
 ```
 
 Ожидаем:
-- `20260224_0001 (head)`
+- `20260225_0002 (head)`
 - `No new upgrade operations detected.`
 
 ---

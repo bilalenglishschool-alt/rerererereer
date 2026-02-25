@@ -33,7 +33,9 @@ docker compose exec -T postgres pg_dump -U tutor_assistant -d tutor_assistant \
 
 ```bash
 cd /opt/tutor-assistant
-project=$(basename "$PWD")
+ts=$(date +%Y%m%d_%H%M%S)
+project=${COMPOSE_PROJECT_NAME:-$(basename "$PWD")}
+docker volume ls | grep "${project}_tutor_data"
 docker run --rm \
   -v ${project}_tutor_data:/src:ro \
   -v /opt/tutor-assistant-backups:/dst \

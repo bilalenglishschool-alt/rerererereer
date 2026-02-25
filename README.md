@@ -98,14 +98,15 @@ curl http://localhost:${HOST_PORT:-8000}/health
 4. Worker делает транскрибацию через Whisper и сохраняет `transcript.txt`.
 5. Статус/результат доступен через `GET /api/transcribe/jobs/{job_id}`.
 6. При статусе `failed` можно выполнить `POST /api/transcribe/jobs/{job_id}/retry`.
-7. История задач: `GET /api/transcribe/jobs?limit=20`.
-8. Скачивание transcript: `GET /api/transcribe/jobs/{job_id}/transcript`.
+7. При статусе `queued/processing` можно выполнить `POST /api/transcribe/jobs/{job_id}/cancel`.
+8. История задач: `GET /api/transcribe/jobs?limit=20`.
+9. Скачивание transcript: `GET /api/transcribe/jobs/{job_id}/transcript`.
 
 Защита загрузки:
 - допустимые расширения: `.webm, .mp3, .wav, .m4a, .ogg, .flac, .aac, .mp4`
 - лимит размера файла: `25 MB`
 - rate limit: `6` загрузок в минуту на IP
-- retention cleanup: worker удаляет старые `done/failed` jobs и файлы (по `TRANSCRIPTION_RETENTION_DAYS`)
+- retention cleanup: worker удаляет старые `done/failed/canceled` jobs и файлы (по `TRANSCRIPTION_RETENTION_DAYS`)
 
 ## Каноничная схема
 Таблицы:

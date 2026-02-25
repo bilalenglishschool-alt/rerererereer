@@ -176,6 +176,90 @@ class TranscriptionFlowTest(unittest.TestCase):
                 self.assertEqual(task["task_type"], TASK_TRANSCRIBE_JOB)
                 self.assertEqual(task["lesson_id"], job_id)
 
+    def test_cancel_queued_job_marks_status_canceled(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                create_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"audio-bytes", "audio/webm")},
+                )
+                self.assertEqual(create_response.status_code, 202)
+                job_id = create_response.json()["job_id"]
+                self._job_ids.append(job_id)
+
+                cancel_response = client.post(f"/api/transcribe/jobs/{job_id}/cancel")
+                self.assertEqual(cancel_response.status_code, 200)
+                cancel_payload = cancel_response.json()
+                self.assertEqual(cancel_payload["status"], "canceled")
+                self.assertTrue(cancel_payload["canceled"])
+                self.assertIn("Canceled by user", cancel_payload.get("processing_error", ""))
+
+                status_response = client.get(f"/api/transcribe/jobs/{job_id}")
+                self.assertEqual(status_response.status_code, 200)
+                self.assertEqual(status_response.json()["status"], "canceled")
+
+    def test_retry_canceled_job_puts_it_back_in_queue(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                create_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"audio-bytes", "audio/webm")},
+                )
+                self.assertEqual(create_response.status_code, 202)
+                job_id = create_response.json()["job_id"]
+                self._job_ids.append(job_id)
+
+                cancel_response = client.post(f"/api/transcribe/jobs/{job_id}/cancel")
+                self.assertEqual(cancel_response.status_code, 200)
+
+                retry_response = client.post(f"/api/transcribe/jobs/{job_id}/retry")
+                self.assertEqual(retry_response.status_code, 200)
+                retry_payload = retry_response.json()
+                self.assertEqual(retry_payload["status"], "queued")
+                self.assertTrue(retry_payload["queued"])
+
+                self.assertEqual(len(redis_stub.pushed), 2)
+                _, raw_task = redis_stub.pushed[-1]
+                task = json.loads(raw_task)
+                self.assertEqual(task["task_type"], TASK_TRANSCRIBE_JOB)
+                self.assertEqual(task["lesson_id"], job_id)
+
+    def test_worker_skips_canceled_job(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                create_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"audio-bytes", "audio/webm")},
+                )
+                self.assertEqual(create_response.status_code, 202)
+                job_id = create_response.json()["job_id"]
+                self._job_ids.append(job_id)
+
+        with SessionLocal() as db:
+            job = db.query(TranscriptionJob).filter(TranscriptionJob.id == UUID(job_id)).first()
+            self.assertIsNotNone(job)
+            job.status = "canceled"
+            job.processing_error = "Canceled by user"
+            db.commit()
+
+        with patch("tutor_assistant.worker.transcribe_audio") as mocked_transcribe:
+            process_transcription_job(job_id)
+            mocked_transcribe.assert_not_called()
+
+        with SessionLocal() as db:
+            job = db.query(TranscriptionJob).filter(TranscriptionJob.id == UUID(job_id)).first()
+            self.assertIsNotNone(job)
+            self.assertEqual(job.status, "canceled")
+
     def test_rejects_unsupported_extension(self) -> None:
         from unittest.mock import patch
 

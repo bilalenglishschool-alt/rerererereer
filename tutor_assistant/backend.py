@@ -818,13 +818,13 @@ def retry_transcription_job(job_id: str, db: Session = Depends(get_db)) -> dict:
         payload["queued"] = False
         return payload
 
-    if job.status not in {"failed", "queued"}:
+    if job.status not in {"failed", "queued", "canceled"}:
         raise HTTPException(
             status_code=409,
             detail=f"Cannot retry in status={job.status}",
         )
 
-    if job.status == "failed":
+    if job.status in {"failed", "canceled"}:
         job.status = "queued"
         job.processing_error = None
         job.processed_at = None
@@ -845,6 +845,35 @@ def retry_transcription_job(job_id: str, db: Session = Depends(get_db)) -> dict:
 
     payload = serialize_transcription_job(job)
     payload["queued"] = True
+    return payload
+
+
+@app.post("/api/transcribe/jobs/{job_id}/cancel")
+def cancel_transcription_job(job_id: str, db: Session = Depends(get_db)) -> dict:
+    job_uuid = parse_job_id(job_id)
+    job = db.query(TranscriptionJob).filter(TranscriptionJob.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Transcription job not found")
+
+    if job.status == "canceled":
+        payload = serialize_transcription_job(job)
+        payload["canceled"] = False
+        return payload
+
+    if job.status in {"done", "failed"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot cancel in status={job.status}",
+        )
+
+    job.status = "canceled"
+    job.processing_error = "Canceled by user"
+    job.processed_at = utcnow()
+    db.commit()
+    db.refresh(job)
+
+    payload = serialize_transcription_job(job)
+    payload["canceled"] = True
     return payload
 
 

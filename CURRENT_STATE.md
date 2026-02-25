@@ -106,11 +106,12 @@ docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
   - `GET /transcribe`
   - `POST /api/transcribe/jobs`
   - `GET /api/transcribe/jobs/{job_id}`
+  - `POST /api/transcribe/jobs/{job_id}/cancel`
   - `POST /api/transcribe/jobs/{job_id}/retry`
 - Queue task: `task_type=transcribe_job`
 - Worker поддерживает retry/dead-letter policy для transcription-job.
 - На upload endpoint включен rate limit: `6` загрузок в минуту на IP.
-- Worker выполняет periodic retention cleanup старых `done/failed` transcription jobs.
+- Worker выполняет periodic retention cleanup старых `done/failed/canceled` transcription jobs.
 
 ## 8) Reliability status
 - Invite-flow тесты покрыты: invalid / expired / used / idempotent claim.

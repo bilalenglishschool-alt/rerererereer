@@ -177,21 +177,27 @@ class TranscriptionFlowTest(unittest.TestCase):
                 self.assertEqual(task["lesson_id"], job_id)
 
     def test_rejects_unsupported_extension(self) -> None:
-        with TestClient(app) as client:
-            response = client.post(
-                "/api/transcribe/jobs",
-                files={"audio": ("sample.txt", b"fake-audio-bytes", "audio/webm")},
-            )
+        from unittest.mock import patch
+
+        with patch("tutor_assistant.backend.enforce_transcription_rate_limit", return_value=None):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.txt", b"fake-audio-bytes", "audio/webm")},
+                )
 
         self.assertEqual(response.status_code, 415)
         self.assertIn("Unsupported file extension", response.json().get("detail", ""))
 
     def test_rejects_unsupported_content_type(self) -> None:
-        with TestClient(app) as client:
-            response = client.post(
-                "/api/transcribe/jobs",
-                files={"audio": ("sample.webm", b"fake-audio-bytes", "application/json")},
-            )
+        from unittest.mock import patch
+
+        with patch("tutor_assistant.backend.enforce_transcription_rate_limit", return_value=None):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"fake-audio-bytes", "application/json")},
+                )
 
         self.assertEqual(response.status_code, 415)
         self.assertIn("Unsupported content_type", response.json().get("detail", ""))
@@ -199,12 +205,13 @@ class TranscriptionFlowTest(unittest.TestCase):
     def test_rejects_too_large_file(self) -> None:
         from unittest.mock import patch
 
-        with patch("tutor_assistant.backend.TRANSCRIPTION_MAX_UPLOAD_BYTES", 10):
-            with TestClient(app) as client:
-                response = client.post(
-                    "/api/transcribe/jobs",
-                    files={"audio": ("sample.webm", b"12345678901", "audio/webm")},
-                )
+        with patch("tutor_assistant.backend.enforce_transcription_rate_limit", return_value=None):
+            with patch("tutor_assistant.backend.TRANSCRIPTION_MAX_UPLOAD_BYTES", 10):
+                with TestClient(app) as client:
+                    response = client.post(
+                        "/api/transcribe/jobs",
+                        files={"audio": ("sample.webm", b"12345678901", "audio/webm")},
+                    )
 
         self.assertEqual(response.status_code, 413)
         self.assertIn("File too large", response.json().get("detail", ""))

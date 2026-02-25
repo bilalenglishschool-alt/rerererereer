@@ -41,7 +41,7 @@
 - Базовый вход: `README.md`
 
 ## Следующий этап (рекомендуемо)
-1. Добавить авто-тесты на lifecycle и permission checks.
+1. Расширить тесты на invite-flow, webhook metadata logging и queue retry ветки.
 2. Добавить monitoring/metrics по queue latency и fail-rate.
 3. Уточнить стратегию non-reset migrations для будущего прод-retention.
 4. Улучшить prompt/валидацию LLM-ответа и добавить retry-policy для провайдера.

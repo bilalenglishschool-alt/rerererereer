@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import atexit
 from collections.abc import Generator
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import Session, declarative_base, sessionmaker
+from sqlalchemy.orm import Session, close_all_sessions, declarative_base, sessionmaker
 
 from .config import get_settings
 
@@ -32,3 +33,11 @@ def get_db() -> Generator[Session, None, None]:
         yield db
     finally:
         db.close()
+
+
+def shutdown_db() -> None:
+    close_all_sessions()
+    engine.dispose()
+
+
+atexit.register(shutdown_db)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
@@ -16,6 +15,7 @@ from .database import get_db, init_db
 from .models import Artifact, Lesson, LessonChunk
 from .queue import enqueue_process_lesson, get_redis_client
 from .storage import write_chunk
+from .time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -179,7 +179,7 @@ def lesson_start(
 
     if lesson.status == "created":
         lesson.status = "recording"
-        lesson.started_at = lesson.started_at or datetime.utcnow()
+        lesson.started_at = lesson.started_at or utcnow()
         db.commit()
 
     return {"status": lesson.status}
@@ -255,7 +255,7 @@ async def lesson_finish(
 
     if lesson.status != "finished":
         lesson.status = "finished"
-        lesson.finished_at = datetime.utcnow()
+        lesson.finished_at = utcnow()
         lesson.processing_status = "queued"
         lesson.processing_error = None
         lesson.processed_at = None

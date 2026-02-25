@@ -113,6 +113,5 @@ Production reset runbook:
 - `DEPLOY_RESET_DB.md`
 
 ## 9) Known limitations / next priorities
-- Перевести `datetime.utcnow()` на timezone-aware UTC.
-- Добавить авто-тесты invite/permissions/lesson lifecycle/queue.
+- Расширить автотесты на invite-flow, webhook и retry-ветки очереди.
 - При необходимости data retention: подготовить non-reset migration plan.

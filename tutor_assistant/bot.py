@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
-from datetime import datetime, timedelta
+from datetime import timedelta
 from uuid import UUID, uuid4
 
 from aiogram import Bot, Dispatcher, F
@@ -18,6 +18,7 @@ from .database import SessionLocal, init_db
 from .drafts import generate_draft
 from .models import Invite, Lesson, LessonChunk, Student, Tutor, TutorStudent
 from .queue import TASK_GENERATE_ARTIFACTS, enqueue_process_lesson, get_redis_client
+from .time_utils import utcnow
 from .telegram_texts import (
     EDIT_DRAFT_PREFIX,
     REGEN_DRAFT_PREFIX,
@@ -96,7 +97,7 @@ def create_lesson(db, tutor: Tutor, student: Student) -> Lesson:
         student_id=student.id,
         token=secrets.token_urlsafe(24),
         status="created",
-        started_at=datetime.utcnow(),
+        started_at=utcnow(),
         sent_to_student=False,
     )
     db.add(lesson)
@@ -112,7 +113,7 @@ def create_text_lesson(db, tutor: Tutor, student: Student) -> Lesson:
         student_id=student.id,
         token=secrets.token_urlsafe(24),
         status="in_progress",
-        started_at=datetime.utcnow(),
+        started_at=utcnow(),
         sent_to_student=False,
     )
     db.add(lesson)
@@ -250,7 +251,7 @@ def claim_invite(db, token: str, user: User) -> tuple[bool, str]:
     if not invite:
         return False, "Инвайт не найден. Проверьте ссылку."
 
-    now = datetime.utcnow()
+    now = utcnow()
     if invite.used_at is not None:
         return False, "Этот инвайт уже использован."
 
@@ -458,7 +459,7 @@ def build_dispatcher() -> Dispatcher:
                 token=secrets.token_urlsafe(24),
                 tutor_id=tutor.id,
                 student_id=student_id,
-                expires_at=datetime.utcnow() + timedelta(days=7),
+                expires_at=utcnow() + timedelta(days=7),
             )
             db.add(invite)
             db.commit()
@@ -605,7 +606,7 @@ def build_dispatcher() -> Dispatcher:
                 return
 
             lesson.status = "processing"
-            lesson.finished_at = datetime.utcnow()
+            lesson.finished_at = utcnow()
             lesson.processing_status = "queued"
             lesson.processing_error = None
             lesson.processed_at = None
@@ -707,7 +708,7 @@ def build_dispatcher() -> Dispatcher:
                 .values(
                     status="sent",
                     sent_to_student=True,
-                    sent_at=datetime.utcnow(),
+                    sent_at=utcnow(),
                 )
             )
             db.commit()
@@ -857,7 +858,7 @@ def build_dispatcher() -> Dispatcher:
                 .values(
                     status="sent",
                     sent_to_student=True,
-                    sent_at=datetime.utcnow(),
+                    sent_at=utcnow(),
                 )
             )
             db.commit()

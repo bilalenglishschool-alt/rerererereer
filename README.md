@@ -114,3 +114,9 @@ docker compose logs -f backend
 docker compose logs -f worker
 docker compose logs -f bot
 ```
+
+## Автотесты
+
+```bash
+docker compose exec backend python -m unittest discover -s tutor_assistant/tests -p 'test_*.py' -v
+```

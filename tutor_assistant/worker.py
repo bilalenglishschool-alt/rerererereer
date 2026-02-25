@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import update
@@ -26,6 +25,7 @@ from .queue import (
 )
 from .storage import merge_chunks, write_transcript_file
 from .telegram_api import send_draft_to_tutor
+from .time_utils import utcnow
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -131,7 +131,7 @@ def process_audio_lesson(lesson_id: str) -> None:
         lesson.draft_summary = draft["summary"]
         lesson.draft_difficulties = draft["difficulties"]
         lesson.draft_homework = draft["homework"]
-        lesson.processed_at = datetime.utcnow()
+        lesson.processed_at = utcnow()
         lesson.processing_status = "done"
         lesson.processing_error = (
             f"Transcription failed: {transcript_error}" if transcript_error else None
@@ -247,7 +247,7 @@ def process_generate_artifacts(lesson_id: str) -> None:
         lesson.draft_difficulties = difficulties
         lesson.draft_homework = homework
         lesson.status = "draft_ready"
-        lesson.processed_at = datetime.utcnow()
+        lesson.processed_at = utcnow()
         lesson.processing_status = "done"
         lesson.processing_error = None
 

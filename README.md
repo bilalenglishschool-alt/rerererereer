@@ -34,7 +34,10 @@ Docker Compose проект с сервисами:
 ```bash
 cp .env.example .env
 docker compose up -d --build
+docker compose exec backend alembic -c /app/alembic.ini upgrade head
 ```
+
+Production reset deploy runbook: `DEPLOY_RESET_DB.md`.
 
 ## Проверка
 
@@ -54,8 +57,10 @@ curl http://localhost:${HOST_PORT:-8000}/health
 
 ## Команды бота
 - `/start`
+- `/start invite_<token>`
 - `/add_student <имя> | <@username или telegram_id>`
-- `/lesson_now [student_id]`
+- `/lesson_now [student_uuid]`
+- `/create_invite [student_uuid]`
 
 ## Whisper (локально)
 - Worker использует `faster-whisper` на CPU и автоматически скачивает модель при первом запуске.

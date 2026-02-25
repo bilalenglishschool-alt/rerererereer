@@ -21,6 +21,14 @@ from .queue import (
     LESSON_QUEUE_NAME,
     TASK_TRANSCRIBE_JOB,
     WORKER_FAILURE_EVENTS_ZSET_KEY,
+    WORKER_METRIC_PROCESSING_DURATION_LAST_MS_KEY,
+    WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY,
+    WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY,
+    WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY,
+    WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY,
+    WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY,
+    WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY,
+    WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY,
     WORKER_METRIC_TASKS_FAILED_KEY,
     WORKER_METRIC_TASKS_PROCESSED_KEY,
     enqueue_process_lesson,
@@ -286,9 +294,14 @@ async def read_upload_limited(audio: UploadFile, max_bytes: int) -> bytes:
     return payload
 
 
-def collect_worker_metrics(redis_client) -> dict[str, int]:
+def collect_worker_metrics(redis_client) -> dict[str, int | float]:
     now_ts = int(time.time())
     ten_minutes_ago = now_ts - 600
+
+    queue_latency_sum = int(redis_client.get(WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY) or 0)
+    queue_latency_samples = int(redis_client.get(WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY) or 0)
+    processing_duration_sum = int(redis_client.get(WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY) or 0)
+    processing_duration_samples = int(redis_client.get(WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY) or 0)
 
     return {
         "tasks_processed_total": int(redis_client.get(WORKER_METRIC_TASKS_PROCESSED_KEY) or 0),
@@ -299,10 +312,26 @@ def collect_worker_metrics(redis_client) -> dict[str, int]:
         "queue_depth": int(redis_client.llen(LESSON_QUEUE_NAME)),
         "processing_depth": int(redis_client.llen(LESSON_PROCESSING_QUEUE_NAME)),
         "dead_letter_depth": int(redis_client.llen(LESSON_DEAD_LETTER_QUEUE_NAME)),
+        "queue_latency_ms_last": int(redis_client.get(WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY) or 0),
+        "queue_latency_ms_max": int(redis_client.get(WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY) or 0),
+        "queue_latency_ms_avg": (
+            round(queue_latency_sum / queue_latency_samples, 2) if queue_latency_samples else 0.0
+        ),
+        "processing_duration_ms_last": int(
+            redis_client.get(WORKER_METRIC_PROCESSING_DURATION_LAST_MS_KEY) or 0
+        ),
+        "processing_duration_ms_max": int(
+            redis_client.get(WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY) or 0
+        ),
+        "processing_duration_ms_avg": (
+            round(processing_duration_sum / processing_duration_samples, 2)
+            if processing_duration_samples
+            else 0.0
+        ),
     }
 
 
-def evaluate_worker_alerts(metrics: dict[str, int]) -> list[str]:
+def evaluate_worker_alerts(metrics: dict[str, int | float]) -> list[str]:
     alerts: list[str] = []
     error_threshold = int(settings.worker_alert_errors_last_10m_threshold)
     dead_letter_threshold = int(settings.worker_alert_dead_letter_threshold)

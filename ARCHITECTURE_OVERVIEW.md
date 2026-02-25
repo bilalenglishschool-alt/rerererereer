@@ -73,7 +73,7 @@ Dead-letter list: `lesson_tasks:dead`.
 
 Payload JSON:
 ```json
-{"task_type":"...","lesson_id":"..."}
+{"task_type":"...","lesson_id":"...","enqueued_at":1700000000000}
 ```
 
 Поддерживаемые `task_type`:
@@ -83,6 +83,7 @@ Payload JSON:
 
 Backward compatibility:
 - старый raw payload (`lesson_id` строкой) трактуется как `process_audio_lesson`.
+- старый JSON payload без `enqueued_at` поддерживается, latency для него не считается.
 
 Retry/failure policy:
 - transient failure -> requeue
@@ -93,6 +94,8 @@ Retry/failure policy:
 - `lesson_metrics:tasks_processed_total`
 - `lesson_metrics:task_failures_total`
 - `lesson_metrics:worker_failures` (ZSET, для окна 10 минут)
+- `lesson_metrics:queue_latency_ms_last/max/sum/samples`
+- `lesson_metrics:processing_duration_ms_last/max/sum/samples`
 - endpoint `GET /metrics/worker`
 - alert endpoint `GET /alerts/worker` (сравнение с threshold из env)
 

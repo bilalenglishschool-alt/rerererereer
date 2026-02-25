@@ -16,13 +16,54 @@ from tutor_assistant.worker import process_transcription_job
 
 
 class _DummyRedis:
+    class _DummyPipeline:
+        def __init__(self, redis: "_DummyRedis") -> None:
+            self._redis = redis
+            self._ops: list[tuple[str, str, int | None]] = []
+
+        def incr(self, key: str) -> "_DummyRedis._DummyPipeline":
+            self._ops.append(("incr", key, None))
+            return self
+
+        def expire(self, key: str, ttl_seconds: int) -> "_DummyRedis._DummyPipeline":
+            self._ops.append(("expire", key, ttl_seconds))
+            return self
+
+        def execute(self) -> list[int]:
+            results: list[int] = []
+            for op_name, key, ttl_seconds in self._ops:
+                if op_name == "incr":
+                    results.append(self._redis.incr(key))
+                elif op_name == "expire":
+                    assert ttl_seconds is not None
+                    results.append(self._redis.expire(key, ttl_seconds))
+            self._ops.clear()
+            return results
+
     def __init__(self) -> None:
         self.pushed: list[tuple[str, str]] = []
         self.closed = False
+        self._counters: dict[str, int] = {}
+        self._ttls: dict[str, int] = {}
 
     def lpush(self, key: str, payload: str) -> int:
         self.pushed.append((key, payload))
         return len(self.pushed)
+
+    def pipeline(self, transaction=True):  # noqa: ANN001, ARG002
+        return _DummyRedis._DummyPipeline(self)
+
+    def incr(self, key: str) -> int:
+        value = int(self._counters.get(key, 0)) + 1
+        self._counters[key] = value
+        return value
+
+    def expire(self, key: str, ttl_seconds: int) -> int:
+        self._ttls[key] = int(ttl_seconds)
+        return 1
+
+    def ttl(self, key: str) -> int:
+        return int(self._ttls.get(key, -1))
 
     def close(self) -> None:
         self.closed = True
@@ -167,6 +208,28 @@ class TranscriptionFlowTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 413)
         self.assertIn("File too large", response.json().get("detail", ""))
+
+    def test_rate_limit_blocks_excess_requests(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with patch("tutor_assistant.backend.TRANSCRIPTION_RATE_LIMIT_PER_MINUTE", 1):
+                with TestClient(app) as client:
+                    first = client.post(
+                        "/api/transcribe/jobs",
+                        files={"audio": ("sample.webm", b"first-audio", "audio/webm")},
+                    )
+                    self.assertEqual(first.status_code, 202)
+                    first_job_id = first.json()["job_id"]
+                    self._job_ids.append(first_job_id)
+
+                    second = client.post(
+                        "/api/transcribe/jobs",
+                        files={"audio": ("sample.webm", b"second-audio", "audio/webm")},
+                    )
+                    self.assertEqual(second.status_code, 429)
+                    self.assertIn("Rate limit exceeded", second.json().get("detail", ""))
 
 
 if __name__ == "__main__":

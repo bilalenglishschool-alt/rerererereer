@@ -35,6 +35,8 @@ settings = get_settings()
 app = FastAPI(title="Tutor Assistant MVP")
 
 TRANSCRIPTION_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+TRANSCRIPTION_RATE_LIMIT_PER_MINUTE = 6
+TRANSCRIPTION_RATE_LIMIT_WINDOW_SECONDS = 60
 TRANSCRIPTION_ALLOWED_EXTENSIONS = {
     ".aac",
     ".flac",
@@ -172,6 +174,57 @@ def serialize_transcription_job(job: TranscriptionJob) -> dict:
     }
 
 
+def get_request_client_id(request: Request) -> str:
+    x_forwarded_for = (request.headers.get("x-forwarded-for") or "").strip()
+    if x_forwarded_for:
+        first_ip = x_forwarded_for.split(",")[0].strip()
+        if first_ip:
+            return first_ip
+
+    if request.client and request.client.host:
+        return request.client.host
+
+    return "unknown"
+
+
+def enforce_transcription_rate_limit(request: Request) -> None:
+    redis_client = None
+    try:
+        redis_client = get_redis_client(settings)
+        client_id = get_request_client_id(request)
+        now_ts = int(time.time())
+        window_start = now_ts - (now_ts % TRANSCRIPTION_RATE_LIMIT_WINDOW_SECONDS)
+        redis_key = f"transcription_rate:{client_id}:{window_start}"
+
+        pipeline = redis_client.pipeline(transaction=True)
+        pipeline.incr(redis_key)
+        pipeline.expire(redis_key, TRANSCRIPTION_RATE_LIMIT_WINDOW_SECONDS + 5)
+        values = pipeline.execute()
+
+        current_count = int(values[0]) if values else 0
+        if current_count <= TRANSCRIPTION_RATE_LIMIT_PER_MINUTE:
+            return
+
+        ttl = int(redis_client.ttl(redis_key) or TRANSCRIPTION_RATE_LIMIT_WINDOW_SECONDS)
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Rate limit exceeded for transcription uploads. "
+                f"Try again in {ttl} seconds."
+            ),
+        )
+    except HTTPException:
+        raise
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail="Queue unavailable, try again") from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Rate-limit check failed")
+        raise HTTPException(status_code=503, detail="Queue unavailable, try again") from exc
+    finally:
+        if redis_client is not None:
+            redis_client.close()
+
+
 def format_megabytes(size_bytes: int) -> str:
     mb_value = size_bytes / (1024 * 1024)
     if mb_value.is_integer():
@@ -296,9 +349,11 @@ def transcribe_page(request: Request) -> HTMLResponse:
 
 @app.post("/api/transcribe/jobs", status_code=202)
 async def create_transcription_job(
+    request: Request,
     audio: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> dict:
+    enforce_transcription_rate_limit(request)
     suffix = validate_transcription_upload_meta(audio)
     payload = await read_upload_limited(audio, TRANSCRIPTION_MAX_UPLOAD_BYTES)
 

@@ -62,6 +62,7 @@
 4. Worker обрабатывает задачу, вызывает Whisper и сохраняет transcript.
 5. Клиент читает статус/результат через `GET /api/transcribe/jobs/{job_id}`.
 6. Для `failed` доступен `POST /api/transcribe/jobs/{job_id}/retry`.
+7. Для защиты backend применяет upload validation и rate limit (`6 req/min` на IP).
 
 ## 5) Queue протокол
 Redis list `lesson_tasks`.

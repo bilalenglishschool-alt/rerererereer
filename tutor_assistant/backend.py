@@ -70,6 +70,81 @@ TRANSCRIPTION_ALLOWED_CONTENT_TYPES = {
     "video/webm",
 }
 
+WORKER_PROMETHEUS_METRICS: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "tasks_processed_total",
+        "tutor_assistant_worker_tasks_processed_total",
+        "counter",
+        "Total number of processed worker tasks.",
+    ),
+    (
+        "task_failures_total",
+        "tutor_assistant_worker_task_failures_total",
+        "counter",
+        "Total number of failed worker tasks.",
+    ),
+    (
+        "worker_errors_last_10m",
+        "tutor_assistant_worker_errors_last_10m",
+        "gauge",
+        "Number of worker failures in the last 10 minutes.",
+    ),
+    (
+        "queue_depth",
+        "tutor_assistant_worker_queue_depth",
+        "gauge",
+        "Current task queue depth.",
+    ),
+    (
+        "processing_depth",
+        "tutor_assistant_worker_processing_depth",
+        "gauge",
+        "Current in-flight processing queue depth.",
+    ),
+    (
+        "dead_letter_depth",
+        "tutor_assistant_worker_dead_letter_depth",
+        "gauge",
+        "Current dead-letter queue depth.",
+    ),
+    (
+        "queue_latency_ms_last",
+        "tutor_assistant_worker_queue_latency_ms_last",
+        "gauge",
+        "Last observed queue latency in milliseconds.",
+    ),
+    (
+        "queue_latency_ms_max",
+        "tutor_assistant_worker_queue_latency_ms_max",
+        "gauge",
+        "Maximum observed queue latency in milliseconds.",
+    ),
+    (
+        "queue_latency_ms_avg",
+        "tutor_assistant_worker_queue_latency_ms_avg",
+        "gauge",
+        "Average observed queue latency in milliseconds.",
+    ),
+    (
+        "processing_duration_ms_last",
+        "tutor_assistant_worker_processing_duration_ms_last",
+        "gauge",
+        "Last observed processing duration in milliseconds.",
+    ),
+    (
+        "processing_duration_ms_max",
+        "tutor_assistant_worker_processing_duration_ms_max",
+        "gauge",
+        "Maximum observed processing duration in milliseconds.",
+    ),
+    (
+        "processing_duration_ms_avg",
+        "tutor_assistant_worker_processing_duration_ms_avg",
+        "gauge",
+        "Average observed processing duration in milliseconds.",
+    ),
+)
+
 
 def _extract_webhook_meta(update: object) -> tuple[object, str, object]:
     if not isinstance(update, dict):
@@ -331,6 +406,26 @@ def collect_worker_metrics(redis_client) -> dict[str, int | float]:
     }
 
 
+def render_worker_metrics_prometheus(metrics: dict[str, int | float]) -> str:
+    lines: list[str] = []
+
+    for field_name, metric_name, metric_type, metric_help in WORKER_PROMETHEUS_METRICS:
+        raw_value = metrics.get(field_name, 0)
+        if isinstance(raw_value, bool):
+            metric_value = 1 if raw_value else 0
+        elif isinstance(raw_value, (int, float)):
+            metric_value = raw_value
+        else:
+            metric_value = 0
+
+        lines.append(f"# HELP {metric_name} {metric_help}")
+        lines.append(f"# TYPE {metric_name} {metric_type}")
+        lines.append(f"{metric_name} {metric_value}")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
 def evaluate_worker_alerts(metrics: dict[str, int | float]) -> list[str]:
     alerts: list[str] = []
     error_threshold = int(settings.worker_alert_errors_last_10m_threshold)
@@ -396,6 +491,21 @@ def worker_metrics() -> dict:
         return collect_worker_metrics(redis_client)
     finally:
         redis_client.close()
+
+
+@app.get("/metrics/worker/prometheus", response_class=PlainTextResponse)
+def worker_metrics_prometheus() -> PlainTextResponse:
+    redis_client = get_redis_client(settings)
+    try:
+        metrics = collect_worker_metrics(redis_client)
+    finally:
+        redis_client.close()
+
+    payload = render_worker_metrics_prometheus(metrics)
+    return PlainTextResponse(
+        content=payload,
+        media_type="text/plain; version=0.0.4",
+    )
 
 
 @app.get("/alerts/worker")

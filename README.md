@@ -169,3 +169,5 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
 - HTTP endpoint:
   - `GET /metrics/worker`
   - `GET /alerts/worker`
+
+- Branch protection smoke-check branch: `codex/branch-protection-smoke`

@@ -16,6 +16,18 @@ class Settings:
     whisper_model: str
     database_url: str
     redis_url: str
+    transcription_retention_days: int
+    transcription_cleanup_interval_seconds: int
+
+
+def _parse_positive_int(raw_value: str, default: int, minimum: int) -> int:
+    try:
+        parsed = int((raw_value or "").strip())
+    except (TypeError, ValueError):
+        return default
+    if parsed < minimum:
+        return minimum
+    return parsed
 
 
 @lru_cache(maxsize=1)
@@ -34,6 +46,16 @@ def get_settings() -> Settings:
         )
 
     redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0").strip()
+    transcription_retention_days = _parse_positive_int(
+        os.getenv("TRANSCRIPTION_RETENTION_DAYS", "14"),
+        default=14,
+        minimum=1,
+    )
+    transcription_cleanup_interval_seconds = _parse_positive_int(
+        os.getenv("TRANSCRIPTION_CLEANUP_INTERVAL_SECONDS", "600"),
+        default=600,
+        minimum=30,
+    )
 
     return Settings(
         bot_token=os.getenv("BOT_TOKEN", "").strip(),
@@ -44,4 +66,6 @@ def get_settings() -> Settings:
         whisper_model=os.getenv("WHISPER_MODEL", "base").strip() or "base",
         database_url=database_url,
         redis_url=redis_url,
+        transcription_retention_days=transcription_retention_days,
+        transcription_cleanup_interval_seconds=transcription_cleanup_interval_seconds,
     )

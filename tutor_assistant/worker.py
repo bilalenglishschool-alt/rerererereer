@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import time
+from datetime import timedelta
 from pathlib import Path
 from uuid import UUID
 
-from sqlalchemy import update
+from sqlalchemy import and_, or_, update
 
 from .config import get_settings
 from .database import SessionLocal, init_db
@@ -386,6 +388,83 @@ def process_transcription_job(job_id: str) -> None:
         db.commit()
 
 
+def remove_transcription_job_dir(job_id: str) -> bool:
+    base_dir = (settings.storage_path / "transcriptions").resolve()
+    job_dir = (base_dir / str(job_id)).resolve()
+    if not job_dir.is_relative_to(base_dir):
+        logger.warning("Skip deleting unexpected transcription path: %s", job_dir)
+        return False
+
+    if not job_dir.exists():
+        return True
+
+    shutil.rmtree(job_dir, ignore_errors=False)
+    return True
+
+
+def cleanup_transcription_jobs(retention_days: int, batch_size: int = 200) -> int:
+    cutoff = utcnow() - timedelta(days=retention_days)
+    deleted_job_ids: list[str] = []
+
+    with SessionLocal() as db:
+        stale_jobs = (
+            db.query(TranscriptionJob)
+            .filter(TranscriptionJob.status.in_(("done", "failed")))
+            .filter(
+                or_(
+                    and_(
+                        TranscriptionJob.processed_at.isnot(None),
+                        TranscriptionJob.processed_at <= cutoff,
+                    ),
+                    and_(
+                        TranscriptionJob.processed_at.is_(None),
+                        TranscriptionJob.created_at <= cutoff,
+                    ),
+                )
+            )
+            .order_by(TranscriptionJob.created_at.asc())
+            .limit(batch_size)
+            .all()
+        )
+
+        if not stale_jobs:
+            return 0
+
+        for job in stale_jobs:
+            deleted_job_ids.append(str(job.id))
+            db.delete(job)
+
+        db.commit()
+
+    deleted_count = 0
+    for job_id in deleted_job_ids:
+        try:
+            remove_transcription_job_dir(job_id)
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to delete transcription directory for job %s", job_id, exc_info=True)
+        deleted_count += 1
+
+    logger.info(
+        "Transcription retention cleanup removed %s job(s), cutoff=%s",
+        deleted_count,
+        cutoff.isoformat(),
+    )
+    return deleted_count
+
+
+def run_periodic_cleanup(last_run_monotonic: float) -> float:
+    now_mono = time.monotonic()
+    interval = max(30, int(settings.transcription_cleanup_interval_seconds))
+    if last_run_monotonic and (now_mono - last_run_monotonic) < interval:
+        return last_run_monotonic
+
+    try:
+        cleanup_transcription_jobs(retention_days=settings.transcription_retention_days)
+    except Exception:  # noqa: BLE001
+        logger.exception("Periodic transcription cleanup failed")
+    return now_mono
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     init_db()
@@ -395,7 +474,10 @@ def main() -> None:
     if restored:
         logger.warning("Restored %s in-flight task(s) back to queue", restored)
 
+    last_cleanup_run = run_periodic_cleanup(0.0)
+
     while True:
+        last_cleanup_run = run_periodic_cleanup(last_cleanup_run)
         raw_task = reserve_task(redis_client, timeout_seconds=5)
         if not raw_task:
             continue

@@ -24,6 +24,8 @@ Docker Compose проект с сервисами:
 - `OPENAI_API_KEY` (используется как fallback, если `LLM_API_KEY` пустой)
 - `OPENAI_MODEL` (по умолчанию `gpt-4o-mini`)
 - `WHISPER_MODEL` (`base` по умолчанию, можно `small`)
+- `TRANSCRIPTION_RETENTION_DAYS` (по умолчанию `14`)
+- `TRANSCRIPTION_CLEANUP_INTERVAL_SECONDS` (по умолчанию `600`)
 - `POSTGRES_DB`
 - `POSTGRES_USER`
 - `POSTGRES_PASSWORD`
@@ -97,6 +99,7 @@ curl http://localhost:${HOST_PORT:-8000}/health
 - допустимые расширения: `.webm, .mp3, .wav, .m4a, .ogg, .flac, .aac, .mp4`
 - лимит размера файла: `25 MB`
 - rate limit: `6` загрузок в минуту на IP
+- retention cleanup: worker удаляет старые `done/failed` jobs и файлы (по `TRANSCRIPTION_RETENTION_DAYS`)
 
 ## Каноничная схема
 Таблицы:

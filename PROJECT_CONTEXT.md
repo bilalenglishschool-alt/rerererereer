@@ -32,6 +32,7 @@
   - `POST /api/transcribe/jobs/{job_id}/retry`
   - web UI `/transcribe`.
   - защита API: размер/тип файла + rate limit (`6` загрузок в минуту на IP).
+  - retention cleanup: worker удаляет старые `done/failed` jobs и их файлы.
 
 ## Критичные инварианты
 - Один `in_progress` lesson на tutor (partial unique index).

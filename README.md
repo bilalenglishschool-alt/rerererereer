@@ -29,6 +29,7 @@ Docker Compose проект с сервисами:
 - `WORKER_ALERT_ERRORS_LAST_10M_THRESHOLD` (по умолчанию `0`)
 - `WORKER_ALERT_DEAD_LETTER_THRESHOLD` (по умолчанию `0`)
 - `WORKER_ALERT_QUEUE_DEPTH_THRESHOLD` (по умолчанию `20`)
+- `WORKER_ALERT_TRANSCRIBE_QUEUE_DEPTH_THRESHOLD` (по умолчанию `10`)
 - `WORKER_ALERT_HEARTBEAT_AGE_SECONDS_THRESHOLD` (по умолчанию `120`)
 - `POSTGRES_DB`
 - `POSTGRES_USER`
@@ -199,10 +200,13 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
     - `worker_errors_last_10m`
     - `dead_letter_depth`
     - `queue_depth`
+    - `transcribe_queue_depth`
     - `worker_heartbeat_age_seconds`
   - `/metrics/worker` fields:
     - `tasks_processed_total`, `task_failures_total`, `worker_errors_last_10m`
     - `queue_depth`, `processing_depth`, `dead_letter_depth`
+    - `transcribe_queue_depth`, `transcribe_processing_depth`
+    - `queue_depth_by_type`, `processing_depth_by_type`
     - `queue_latency_ms_last`, `queue_latency_ms_max`, `queue_latency_ms_avg`
     - `queue_latency_ms_last_by_type`, `queue_latency_ms_max_by_type`, `queue_latency_ms_avg_by_type`
     - `processing_duration_ms_last`, `processing_duration_ms_max`, `processing_duration_ms_avg`
@@ -212,7 +216,7 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
   - `/metrics/worker/prometheus`:
     - text format `text/plain; version=0.0.4`
     - ready for Prometheus scrape
-    - includes labeled counters and labeled latency/duration gauges by `task_type`
+    - includes labeled counters, queue/processing depth gauges and labeled latency/duration gauges by `task_type`
   - when Redis is unavailable, metrics endpoints return `503`
 - External alert check script:
   - `python -m tutor_assistant.ops.check_worker_alerts`

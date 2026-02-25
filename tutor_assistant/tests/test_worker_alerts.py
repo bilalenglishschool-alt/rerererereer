@@ -8,6 +8,14 @@ from fastapi.testclient import TestClient
 from redis.exceptions import RedisError
 
 from tutor_assistant.backend import app
+from tutor_assistant.queue import (
+    LESSON_PROCESSING_QUEUE_NAME,
+    LESSON_QUEUE_NAME,
+    TASK_GENERATE_ARTIFACTS,
+    TASK_PROCESS_AUDIO,
+    TASK_TRANSCRIBE_JOB,
+    build_task_payload,
+)
 
 
 class _AlertRedisStub:
@@ -21,6 +29,7 @@ class _AlertRedisStub:
         processing_depth: int = 0,
         dead_letter_depth: int = 0,
         heartbeat_ts: int = 0,
+        queue_items: dict[str, list[str]] | None = None,
     ) -> None:
         self._values = {
             "lesson_metrics:tasks_processed_total": processed_total,
@@ -31,6 +40,7 @@ class _AlertRedisStub:
             "lesson_tasks:processing": processing_depth,
             "lesson_tasks:dead": dead_letter_depth,
         }
+        self._queue_items = queue_items or {}
         self.closed = False
 
     def get(self, key: str):
@@ -42,6 +52,9 @@ class _AlertRedisStub:
     def llen(self, key: str):
         return self._values.get(key, 0)
 
+    def lrange(self, key: str, start: int, end: int):  # noqa: ARG002
+        return list(self._queue_items.get(key, []))
+
     def close(self) -> None:
         self.closed = True
 
@@ -52,6 +65,7 @@ class WorkerAlertsEndpointTest(unittest.TestCase):
         errors_threshold: int,
         dead_threshold: int,
         queue_depth_threshold: int,
+        transcribe_queue_depth_threshold: int,
         heartbeat_age_threshold: int,
     ):
         return patch(
@@ -60,6 +74,7 @@ class WorkerAlertsEndpointTest(unittest.TestCase):
                 worker_alert_errors_last_10m_threshold=errors_threshold,
                 worker_alert_dead_letter_threshold=dead_threshold,
                 worker_alert_queue_depth_threshold=queue_depth_threshold,
+                worker_alert_transcribe_queue_depth_threshold=transcribe_queue_depth_threshold,
                 worker_alert_heartbeat_age_seconds_threshold=heartbeat_age_threshold,
             ),
         )
@@ -72,11 +87,19 @@ class WorkerAlertsEndpointTest(unittest.TestCase):
             queue_depth=2,
             dead_letter_depth=1,
             heartbeat_ts=1995,
+            queue_items={
+                LESSON_QUEUE_NAME: [
+                    build_task_payload("lesson-1", TASK_TRANSCRIBE_JOB),
+                    build_task_payload("lesson-2", TASK_GENERATE_ARTIFACTS),
+                ],
+                LESSON_PROCESSING_QUEUE_NAME: [],
+            },
         )
         with self._run_with_settings(
             errors_threshold=2,
             dead_threshold=1,
             queue_depth_threshold=2,
+            transcribe_queue_depth_threshold=2,
             heartbeat_age_threshold=10,
         ):
             with patch("tutor_assistant.backend.time.time", return_value=2000):
@@ -101,11 +124,22 @@ class WorkerAlertsEndpointTest(unittest.TestCase):
             queue_depth=5,
             dead_letter_depth=2,
             heartbeat_ts=1900,
+            queue_items={
+                LESSON_QUEUE_NAME: [
+                    build_task_payload("lesson-1", TASK_TRANSCRIBE_JOB),
+                    build_task_payload("lesson-2", TASK_TRANSCRIBE_JOB),
+                    build_task_payload("lesson-3", TASK_TRANSCRIBE_JOB),
+                    build_task_payload("lesson-4", TASK_PROCESS_AUDIO),
+                    build_task_payload("lesson-5", TASK_GENERATE_ARTIFACTS),
+                ],
+                LESSON_PROCESSING_QUEUE_NAME: [],
+            },
         )
         with self._run_with_settings(
             errors_threshold=1,
             dead_threshold=0,
             queue_depth_threshold=1,
+            transcribe_queue_depth_threshold=1,
             heartbeat_age_threshold=30,
         ):
             with patch("tutor_assistant.backend.time.time", return_value=2000):
@@ -116,11 +150,13 @@ class WorkerAlertsEndpointTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "alert")
-        self.assertGreaterEqual(len(payload["alerts"]), 4)
+        self.assertGreaterEqual(len(payload["alerts"]), 5)
         self.assertIn("worker_errors_last_10m exceeded threshold", payload["alerts"][0])
         self.assertIn("queue_depth", " ".join(payload["alerts"]))
+        self.assertIn("transcribe_queue_depth exceeded threshold", " ".join(payload["alerts"]))
         self.assertIn("worker_heartbeat_age_seconds exceeded threshold", " ".join(payload["alerts"]))
         self.assertEqual(payload["thresholds"]["queue_depth"], 1)
+        self.assertEqual(payload["thresholds"]["transcribe_queue_depth"], 1)
         self.assertEqual(payload["thresholds"]["worker_heartbeat_age_seconds"], 30)
         self.assertTrue(redis_stub.closed)
 
@@ -137,6 +173,7 @@ class WorkerAlertsEndpointTest(unittest.TestCase):
             errors_threshold=10,
             dead_threshold=10,
             queue_depth_threshold=10,
+            transcribe_queue_depth_threshold=10,
             heartbeat_age_threshold=60,
         ):
             with patch("tutor_assistant.backend.time.time", return_value=2000):
@@ -156,6 +193,7 @@ class WorkerAlertsEndpointTest(unittest.TestCase):
             errors_threshold=0,
             dead_threshold=0,
             queue_depth_threshold=0,
+            transcribe_queue_depth_threshold=0,
             heartbeat_age_threshold=0,
         ):
             with patch("tutor_assistant.backend.get_redis_client", side_effect=RedisError("down")):

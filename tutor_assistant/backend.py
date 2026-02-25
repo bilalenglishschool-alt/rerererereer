@@ -36,6 +36,7 @@ from .queue import (
     WORKER_METRIC_TASKS_PROCESSED_KEY,
     enqueue_process_lesson,
     get_redis_client,
+    parse_task_payload,
 )
 from .storage import write_chunk, write_transcription_source
 from .time_utils import utcnow
@@ -109,6 +110,18 @@ WORKER_PROMETHEUS_METRICS: tuple[tuple[str, str, str, str], ...] = (
         "tutor_assistant_worker_dead_letter_depth",
         "gauge",
         "Current dead-letter queue depth.",
+    ),
+    (
+        "transcribe_queue_depth",
+        "tutor_assistant_worker_transcribe_queue_depth",
+        "gauge",
+        "Current transcribe_job queue depth.",
+    ),
+    (
+        "transcribe_processing_depth",
+        "tutor_assistant_worker_transcribe_processing_depth",
+        "gauge",
+        "Current in-flight transcribe_job processing depth.",
     ),
     (
         "queue_latency_ms_last",
@@ -424,6 +437,18 @@ def collect_task_type_timing_metrics(
     return last_values, max_values, avg_values
 
 
+def count_task_types_in_queue(redis_client, queue_name: str) -> dict[str, int]:
+    counts = {task_type: 0 for task_type in WORKER_KNOWN_TASK_TYPES}
+    raw_tasks = redis_client.lrange(queue_name, 0, -1) or []
+
+    for raw_task in raw_tasks:
+        task_type, _lesson_id, _enqueued_at = parse_task_payload(str(raw_task))
+        if task_type in counts:
+            counts[task_type] += 1
+
+    return counts
+
+
 def collect_worker_metrics(redis_client) -> WorkerMetricsPayload:
     now_ts = int(time.time())
     ten_minutes_ago = now_ts - 600
@@ -464,6 +489,8 @@ def collect_worker_metrics(redis_client) -> WorkerMetricsPayload:
         sum_key=WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY,
         samples_key=WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY,
     )
+    queue_depth_by_type = count_task_types_in_queue(redis_client, LESSON_QUEUE_NAME)
+    processing_depth_by_type = count_task_types_in_queue(redis_client, LESSON_PROCESSING_QUEUE_NAME)
 
     return {
         "tasks_processed_total": int(redis_client.get(WORKER_METRIC_TASKS_PROCESSED_KEY) or 0),
@@ -492,8 +519,12 @@ def collect_worker_metrics(redis_client) -> WorkerMetricsPayload:
         ),
         "worker_heartbeat_ts": heartbeat_ts,
         "worker_heartbeat_age_seconds": heartbeat_age_seconds,
+        "transcribe_queue_depth": int(queue_depth_by_type.get(TASK_TRANSCRIBE_JOB, 0)),
+        "transcribe_processing_depth": int(processing_depth_by_type.get(TASK_TRANSCRIBE_JOB, 0)),
         "tasks_processed_by_type": tasks_processed_by_type,
         "task_failures_by_type": task_failures_by_type,
+        "queue_depth_by_type": queue_depth_by_type,
+        "processing_depth_by_type": processing_depth_by_type,
         "queue_latency_ms_last_by_type": queue_latency_last_by_type,
         "queue_latency_ms_max_by_type": queue_latency_max_by_type,
         "queue_latency_ms_avg_by_type": queue_latency_avg_by_type,
@@ -566,6 +597,20 @@ def render_worker_metrics_prometheus(metrics: WorkerMetricsPayload) -> str:
     )
     append_prometheus_metric_by_task_type(
         lines,
+        metric_name="tutor_assistant_worker_queue_depth_by_type",
+        metric_type="gauge",
+        metric_help="Current queue depth by task type.",
+        values=get_metrics_by_task_type(metrics, "queue_depth_by_type"),
+    )
+    append_prometheus_metric_by_task_type(
+        lines,
+        metric_name="tutor_assistant_worker_processing_depth_by_type",
+        metric_type="gauge",
+        metric_help="Current in-flight processing depth by task type.",
+        values=get_metrics_by_task_type(metrics, "processing_depth_by_type"),
+    )
+    append_prometheus_metric_by_task_type(
+        lines,
         metric_name="tutor_assistant_worker_queue_latency_ms_last_by_type",
         metric_type="gauge",
         metric_help="Last observed queue latency in milliseconds by task type.",
@@ -616,11 +661,13 @@ def evaluate_worker_alerts(metrics: WorkerMetricsPayload) -> list[str]:
     error_threshold = int(settings.worker_alert_errors_last_10m_threshold)
     dead_letter_threshold = int(settings.worker_alert_dead_letter_threshold)
     queue_depth_threshold = int(settings.worker_alert_queue_depth_threshold)
+    transcribe_queue_depth_threshold = int(settings.worker_alert_transcribe_queue_depth_threshold)
     heartbeat_age_threshold = int(settings.worker_alert_heartbeat_age_seconds_threshold)
 
     errors_last_10m = int(metrics.get("worker_errors_last_10m", 0))
     dead_letter_depth = int(metrics.get("dead_letter_depth", 0))
     queue_depth = int(metrics.get("queue_depth", 0))
+    transcribe_queue_depth = int(metrics.get("transcribe_queue_depth", 0))
     heartbeat_age_seconds = int(metrics.get("worker_heartbeat_age_seconds", -1))
 
     if errors_last_10m > error_threshold:
@@ -637,6 +684,11 @@ def evaluate_worker_alerts(metrics: WorkerMetricsPayload) -> list[str]:
         alerts.append(
             "queue_depth exceeded threshold: "
             f"{queue_depth} > {queue_depth_threshold}"
+        )
+    if transcribe_queue_depth > transcribe_queue_depth_threshold:
+        alerts.append(
+            "transcribe_queue_depth exceeded threshold: "
+            f"{transcribe_queue_depth} > {transcribe_queue_depth_threshold}"
         )
     if heartbeat_age_seconds < 0:
         alerts.append("worker heartbeat missing")
@@ -718,6 +770,7 @@ def worker_alerts() -> dict:
             "worker_errors_last_10m": int(settings.worker_alert_errors_last_10m_threshold),
             "dead_letter_depth": int(settings.worker_alert_dead_letter_threshold),
             "queue_depth": int(settings.worker_alert_queue_depth_threshold),
+            "transcribe_queue_depth": int(settings.worker_alert_transcribe_queue_depth_threshold),
             "worker_heartbeat_age_seconds": int(
                 settings.worker_alert_heartbeat_age_seconds_threshold
             ),

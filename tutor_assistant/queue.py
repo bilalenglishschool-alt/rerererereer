@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 from redis import Redis
@@ -18,10 +19,31 @@ TASK_TRANSCRIBE_JOB = "transcribe_job"
 WORKER_METRIC_TASKS_PROCESSED_KEY = "lesson_metrics:tasks_processed_total"
 WORKER_METRIC_TASKS_FAILED_KEY = "lesson_metrics:task_failures_total"
 WORKER_FAILURE_EVENTS_ZSET_KEY = "lesson_metrics:worker_failures"
+WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY = "lesson_metrics:queue_latency_ms_last"
+WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY = "lesson_metrics:queue_latency_ms_max"
+WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY = "lesson_metrics:queue_latency_ms_sum"
+WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY = "lesson_metrics:queue_latency_ms_samples"
+WORKER_METRIC_PROCESSING_DURATION_LAST_MS_KEY = "lesson_metrics:processing_duration_ms_last"
+WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY = "lesson_metrics:processing_duration_ms_max"
+WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY = "lesson_metrics:processing_duration_ms_sum"
+WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY = "lesson_metrics:processing_duration_ms_samples"
 
 
 def get_redis_client(settings: Settings) -> Redis:
     return Redis.from_url(settings.redis_url, decode_responses=True)
+
+
+def now_epoch_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def build_task_payload(lesson_id: str, task_type: str, enqueued_at: int | None = None) -> str:
+    payload = {
+        "task_type": str(task_type or TASK_PROCESS_AUDIO),
+        "lesson_id": str(lesson_id or "").strip(),
+        "enqueued_at": int(enqueued_at or now_epoch_ms()),
+    }
+    return json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
 
 
 def enqueue_process_lesson(
@@ -29,32 +51,45 @@ def enqueue_process_lesson(
     lesson_id: str,
     task_type: str = TASK_PROCESS_AUDIO,
 ) -> None:
-    payload = json.dumps(
-        {
-            "task_type": task_type,
-            "lesson_id": lesson_id,
-        },
-        ensure_ascii=True,
-        separators=(",", ":"),
-    )
+    payload = build_task_payload(lesson_id=lesson_id, task_type=task_type)
     redis_client.lpush(LESSON_QUEUE_NAME, payload)
 
 
-def parse_task(raw_task: str) -> tuple[str, str]:
+def parse_task_payload(raw_task: str) -> tuple[str, str, int | None]:
     task = str(raw_task).strip()
     if not task:
-        return "", ""
+        return "", "", None
 
     try:
         data = json.loads(task)
     except json.JSONDecodeError:
-        return TASK_PROCESS_AUDIO, task
+        return TASK_PROCESS_AUDIO, task, None
 
     if not isinstance(data, dict):
-        return TASK_PROCESS_AUDIO, task
+        return TASK_PROCESS_AUDIO, task, None
 
     lesson_id = str(data.get("lesson_id", "")).strip()
     task_type = str(data.get("task_type", "")).strip() or TASK_PROCESS_AUDIO
+    enqueued_at_raw = data.get("enqueued_at")
+    enqueued_at: int | None = None
+    if isinstance(enqueued_at_raw, (int, float)):
+        enqueued_at = int(enqueued_at_raw)
+    elif isinstance(enqueued_at_raw, str):
+        raw_value = enqueued_at_raw.strip()
+        if raw_value:
+            try:
+                enqueued_at = int(float(raw_value))
+            except ValueError:
+                enqueued_at = None
+
+    if enqueued_at is not None and enqueued_at <= 0:
+        enqueued_at = None
+
+    return task_type, lesson_id, enqueued_at
+
+
+def parse_task(raw_task: str) -> tuple[str, str]:
+    task_type, lesson_id, _enqueued_at = parse_task_payload(raw_task)
     return task_type, lesson_id
 
 
@@ -71,9 +106,14 @@ def ack_task(redis_client: Redis, raw_task: str) -> None:
 
 
 def requeue_task(redis_client: Redis, raw_task: str) -> None:
+    task_type, lesson_id, _enqueued_at = parse_task_payload(raw_task)
+    refreshed_task = raw_task
+    if lesson_id:
+        refreshed_task = build_task_payload(lesson_id=lesson_id, task_type=task_type)
+
     pipeline = redis_client.pipeline(transaction=True)
     pipeline.lrem(LESSON_PROCESSING_QUEUE_NAME, 1, raw_task)
-    pipeline.rpush(LESSON_QUEUE_NAME, raw_task)
+    pipeline.rpush(LESSON_QUEUE_NAME, refreshed_task)
     pipeline.execute()
 
 

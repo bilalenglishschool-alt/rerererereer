@@ -40,7 +40,7 @@
 ## Критичные инварианты
 - Один `in_progress` lesson на tutor (partial unique index).
 - Все schema changes только миграциями Alembic.
-- Queue payload содержит `task_type` + `lesson_id`.
+- Queue payload содержит `task_type` + `lesson_id` + `enqueued_at`.
 - `task_type=transcribe_job` использует тот же payload-формат (в `lesson_id` передаётся `job_id`).
 - `lesson_chunks` поддерживает и audio (`path`), и text (`content`).
 - `artifacts` поддерживает file (`path`) и text (`content`).
@@ -58,6 +58,4 @@
 
 ## Следующий этап (рекомендуемо)
 1. Добавить monitoring/alerting на `worker_errors_last_10m > 0`.
-2. Добавить queue latency/duration метрики (enqueue->start, processing time).
-3. Уточнить стратегию non-reset migrations для будущего прод-retention.
-4. Добавить лимиты/валидацию по размеру аудио для `/api/transcribe/jobs`.
+2. Уточнить стратегию non-reset migrations для будущего прод-retention.

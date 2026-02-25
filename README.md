@@ -166,8 +166,23 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
 - Worker counters в Redis:
   - `lesson_metrics:tasks_processed_total`
   - `lesson_metrics:task_failures_total`
+- Queue latency metrics (ms):
+  - `lesson_metrics:queue_latency_ms_last`
+  - `lesson_metrics:queue_latency_ms_max`
+  - `lesson_metrics:queue_latency_ms_sum`
+  - `lesson_metrics:queue_latency_ms_samples`
+- Processing duration metrics (ms):
+  - `lesson_metrics:processing_duration_ms_last`
+  - `lesson_metrics:processing_duration_ms_max`
+  - `lesson_metrics:processing_duration_ms_sum`
+  - `lesson_metrics:processing_duration_ms_samples`
 - Failure events (last-10m check): `lesson_metrics:worker_failures` (sorted set)
 - Dead-letter queue: `lesson_tasks:dead`
 - HTTP endpoint:
   - `GET /metrics/worker`
   - `GET /alerts/worker`
+  - `/metrics/worker` fields:
+    - `tasks_processed_total`, `task_failures_total`, `worker_errors_last_10m`
+    - `queue_depth`, `processing_depth`, `dead_letter_depth`
+    - `queue_latency_ms_last`, `queue_latency_ms_max`, `queue_latency_ms_avg`
+    - `processing_duration_ms_last`, `processing_duration_ms_max`, `processing_duration_ms_avg`

@@ -28,6 +28,7 @@ Docker Compose проект с сервисами:
 - `TRANSCRIPTION_CLEANUP_INTERVAL_SECONDS` (по умолчанию `600`)
 - `WORKER_ALERT_ERRORS_LAST_10M_THRESHOLD` (по умолчанию `0`)
 - `WORKER_ALERT_DEAD_LETTER_THRESHOLD` (по умолчанию `0`)
+- `WORKER_ALERT_QUEUE_DEPTH_THRESHOLD` (по умолчанию `20`)
 - `POSTGRES_DB`
 - `POSTGRES_USER`
 - `POSTGRES_PASSWORD`
@@ -181,6 +182,10 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
 - HTTP endpoint:
   - `GET /metrics/worker`
   - `GET /alerts/worker`
+  - `/alerts/worker` thresholds:
+    - `worker_errors_last_10m`
+    - `dead_letter_depth`
+    - `queue_depth`
   - `/metrics/worker` fields:
     - `tasks_processed_total`, `task_failures_total`, `worker_errors_last_10m`
     - `queue_depth`, `processing_depth`, `dead_letter_depth`

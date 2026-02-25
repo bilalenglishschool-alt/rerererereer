@@ -26,7 +26,7 @@
 - Invite-flow тесты (invalid/expired/used/idempotent).
 - Webhook privacy regression test (metadata-only logging).
 - Worker retry/dead-letter policy + базовые reliability counters.
-- Endpoint alerting: `GET /alerts/worker` по порогам `worker_errors_last_10m` и `dead_letter_depth`.
+- Endpoint alerting: `GET /alerts/worker` по порогам `worker_errors_last_10m`, `dead_letter_depth`, `queue_depth`.
 - Whisper transcription jobs:
   - `POST /api/transcribe/jobs`
   - `GET /api/transcribe/jobs`

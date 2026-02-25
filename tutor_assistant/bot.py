@@ -3,19 +3,18 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
-from aiogram.types import Update
-from datetime import datetime
-from uuid import uuid4
+from datetime import datetime, timedelta
+from uuid import UUID, uuid4
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update, User
 from sqlalchemy import update
 
 from .config import get_settings
 from .database import SessionLocal, init_db
 from .drafts import generate_draft
-from .models import Lesson, Student, Tutor
+from .models import Invite, Lesson, Student, Tutor, TutorStudent
 from .telegram_texts import (
     EDIT_DRAFT_PREFIX,
     REGEN_DRAFT_PREFIX,
@@ -82,6 +81,10 @@ def parse_student_command_payload(raw: str) -> tuple[str, str | None, int | None
     return name_part, tg_username, tg_user_id
 
 
+def parse_uuid(value: str) -> UUID:
+    return UUID(str(value).strip())
+
+
 def create_lesson(db, tutor: Tutor, student: Student) -> Lesson:
     lesson = Lesson(
         id=str(uuid4()),
@@ -146,6 +149,82 @@ def draft_markup(lesson_id: str) -> InlineKeyboardMarkup:
     )
 
 
+def ensure_tutor_student_link(db, tutor_id: UUID, student_id: UUID) -> bool:
+    link = (
+        db.query(TutorStudent)
+        .filter(
+            TutorStudent.tutor_id == tutor_id,
+            TutorStudent.student_id == student_id,
+        )
+        .first()
+    )
+    if link:
+        if not link.is_active:
+            link.is_active = True
+        return False
+
+    db.add(
+        TutorStudent(
+            tutor_id=tutor_id,
+            student_id=student_id,
+            is_active=True,
+        )
+    )
+    return True
+
+
+def derive_student_name(user: User) -> str:
+    if user.full_name:
+        return user.full_name
+    if user.username:
+        return user.username
+    return f"student-{user.id}"
+
+
+def claim_invite(db, token: str, user: User) -> tuple[bool, str]:
+    invite = db.query(Invite).filter(Invite.token == token).with_for_update().first()
+    if not invite:
+        return False, "Инвайт не найден. Проверьте ссылку."
+
+    now = datetime.utcnow()
+    if invite.used_at is not None:
+        return False, "Этот инвайт уже использован."
+
+    if invite.expires_at < now:
+        return False, "Срок действия инвайта истек."
+
+    student: Student | None = None
+    if invite.student_id is not None:
+        student = db.query(Student).filter(Student.id == invite.student_id).first()
+
+    if student is None:
+        student = db.query(Student).filter(Student.tg_user_id == user.id).first()
+
+    if student is None:
+        student = Student(
+            name=derive_student_name(user),
+            tg_user_id=user.id,
+            tg_username=user.username,
+        )
+        db.add(student)
+        db.flush()
+    else:
+        if student.tg_user_id is None:
+            student.tg_user_id = user.id
+        if user.username:
+            student.tg_username = user.username
+        if not student.name:
+            student.name = derive_student_name(user)
+
+    ensure_tutor_student_link(db, invite.tutor_id, student.id)
+    invite.student_id = student.id
+    invite.used_at = now
+
+    db.commit()
+
+    return True, "Готово: вас привязали к преподавателю. Теперь можно продолжать в боте."
+
+
 async def send_draft_preview(chat_id: int, lesson: Lesson, student_name: str, bot: Bot) -> None:
     text = build_draft_text(
         lesson_id=lesson.id,
@@ -161,16 +240,23 @@ def format_start_link(lesson_id: str, token: str) -> str:
     return f"{settings.base_url}/lesson/{lesson_id}?token={token}"
 
 
-def require_message_user(message: Message):
+def require_message_user(message: Message) -> User:
     if not message.from_user:
         raise RuntimeError("Message has no sender")
     return message.from_user
 
 
-def require_callback_user(query: CallbackQuery):
+def require_callback_user(query: CallbackQuery) -> User:
     if not query.from_user:
         raise RuntimeError("Callback has no sender")
     return query.from_user
+
+
+def parse_start_payload(text: str | None) -> str:
+    parts = (text or "").split(maxsplit=1)
+    if len(parts) < 2:
+        return ""
+    return parts[1].strip()
 
 
 def build_dispatcher() -> Dispatcher:
@@ -179,6 +265,19 @@ def build_dispatcher() -> Dispatcher:
     @dp.message(Command("start"))
     async def handle_start(message: Message) -> None:
         user = require_message_user(message)
+        payload = parse_start_payload(message.text)
+
+        if payload.startswith("invite_"):
+            token = payload.removeprefix("invite_").strip()
+            if not token:
+                await message.answer("Пустой токен инвайта. Проверьте ссылку.")
+                return
+
+            with SessionLocal() as db:
+                ok, response_text = claim_invite(db, token=token, user=user)
+
+            await message.answer(response_text)
+            return
 
         with SessionLocal() as db:
             ensure_tutor(
@@ -192,7 +291,8 @@ def build_dispatcher() -> Dispatcher:
             "Привет. Я бот-ассистент репетитора.\n\n"
             "Команды:\n"
             "/add_student <имя> | <@username или telegram_id>\n"
-            "/lesson_now [student_id]"
+            "/lesson_now [student_uuid]\n"
+            "/create_invite [student_uuid]"
         )
 
     @dp.message(Command("add_student"))
@@ -223,20 +323,86 @@ def build_dispatcher() -> Dispatcher:
                 full_name=user.full_name,
             )
 
-            student = Student(
-                tutor_id=tutor.id,
-                name=name,
-                tg_username=tg_username,
-                tg_user_id=tg_user_id,
-            )
-            db.add(student)
+            student: Student | None = None
+            if tg_user_id is not None:
+                student = db.query(Student).filter(Student.tg_user_id == tg_user_id).first()
+
+            if student is None:
+                student = Student(
+                    name=name,
+                    tg_username=tg_username,
+                    tg_user_id=tg_user_id,
+                )
+                db.add(student)
+                db.flush()
+            else:
+                student.name = name
+                if tg_username is not None:
+                    student.tg_username = tg_username
+
+            was_created = ensure_tutor_student_link(db, tutor.id, student.id)
             db.commit()
             db.refresh(student)
 
         contact = f"@{tg_username}" if tg_username else str(tg_user_id)
-        await message.answer(f"Ученик добавлен: #{student.id} {student.name} ({contact})")
+        link_info = "новая связь" if was_created else "связь уже была"
+        await message.answer(
+            f"Ученик доступен: {student.name} ({contact})\n"
+            f"UUID: {student.id}\n"
+            f"Статус: {link_info}."
+        )
 
-    async def send_lesson_link(tutor_user_id: int, student_id: int, bot: Bot) -> None:
+    @dp.message(Command("create_invite"))
+    async def handle_create_invite(message: Message) -> None:
+        user = require_message_user(message)
+        payload = (message.text or "").split(maxsplit=1)
+
+        with SessionLocal() as db:
+            tutor = ensure_tutor(
+                db,
+                tg_user_id=user.id,
+                tg_username=user.username,
+                full_name=user.full_name,
+            )
+
+            student_id: UUID | None = None
+            if len(payload) > 1 and payload[1].strip():
+                try:
+                    student_id = parse_uuid(payload[1].strip())
+                except ValueError:
+                    await message.answer("student_uuid должен быть в формате UUID.")
+                    return
+
+                student_exists = (
+                    db.query(TutorStudent)
+                    .filter(
+                        TutorStudent.tutor_id == tutor.id,
+                        TutorStudent.student_id == student_id,
+                        TutorStudent.is_active.is_(True),
+                    )
+                    .first()
+                )
+                if not student_exists:
+                    await message.answer("Этот student_uuid не привязан к вам.")
+                    return
+
+            invite = Invite(
+                token=secrets.token_urlsafe(24),
+                tutor_id=tutor.id,
+                student_id=student_id,
+                expires_at=datetime.utcnow() + timedelta(days=7),
+            )
+            db.add(invite)
+            db.commit()
+            db.refresh(invite)
+
+        await message.answer(
+            "Инвайт создан (срок 7 дней).\n"
+            "Передайте ученику команду:\n"
+            f"/start invite_{invite.token}"
+        )
+
+    async def send_lesson_link(tutor_user_id: int, student_id: UUID, bot: Bot) -> None:
         with SessionLocal() as db:
             tutor = db.query(Tutor).filter(Tutor.tg_user_id == tutor_user_id).first()
             if not tutor:
@@ -245,7 +411,12 @@ def build_dispatcher() -> Dispatcher:
 
             student = (
                 db.query(Student)
-                .filter(Student.id == student_id, Student.tutor_id == tutor.id)
+                .join(TutorStudent, TutorStudent.student_id == Student.id)
+                .filter(
+                    Student.id == student_id,
+                    TutorStudent.tutor_id == tutor.id,
+                    TutorStudent.is_active.is_(True),
+                )
                 .first()
             )
             if not student:
@@ -253,6 +424,7 @@ def build_dispatcher() -> Dispatcher:
                 return
 
             lesson = create_lesson(db, tutor=tutor, student=student)
+            student_name = student.name
 
         start_url = format_start_link(lesson.id, lesson.token)
         markup = InlineKeyboardMarkup(
@@ -261,7 +433,7 @@ def build_dispatcher() -> Dispatcher:
         await bot.send_message(
             chat_id=tutor_user_id,
             text=(
-                f"Урок создан для ученика {student.name}.\n"
+                f"Урок создан для ученика {student_name}.\n"
                 f"ID урока: {lesson.id}\n"
                 "Откройте страницу урока по кнопке ниже."
             ),
@@ -273,8 +445,14 @@ def build_dispatcher() -> Dispatcher:
         user = require_message_user(message)
 
         payload = (message.text or "").split(maxsplit=1)
-        if len(payload) > 1 and payload[1].strip().isdigit():
-            await send_lesson_link(user.id, int(payload[1].strip()), bot)
+        if len(payload) > 1 and payload[1].strip():
+            try:
+                student_id = parse_uuid(payload[1].strip())
+            except ValueError:
+                await message.answer("student_uuid должен быть в формате UUID.")
+                return
+
+            await send_lesson_link(user.id, student_id, bot)
             return
 
         with SessionLocal() as db:
@@ -284,7 +462,15 @@ def build_dispatcher() -> Dispatcher:
                 tg_username=user.username,
                 full_name=user.full_name,
             )
-            students = db.query(Student).filter(Student.tutor_id == tutor.id).all()
+            students = (
+                db.query(Student)
+                .join(TutorStudent, TutorStudent.student_id == Student.id)
+                .filter(
+                    TutorStudent.tutor_id == tutor.id,
+                    TutorStudent.is_active.is_(True),
+                )
+                .all()
+            )
 
         if not students:
             await message.answer("Нет учеников. Сначала добавьте: /add_student")
@@ -293,7 +479,7 @@ def build_dispatcher() -> Dispatcher:
         keyboard_rows = [
             [
                 InlineKeyboardButton(
-                    text=f"{student.name} (#{student.id})",
+                    text=f"{student.name} ({str(student.id)[:8]})",
                     callback_data=f"{LESSON_PICK_PREFIX}{student.id}",
                 )
             ]
@@ -308,12 +494,15 @@ def build_dispatcher() -> Dispatcher:
     async def handle_pick_student(query: CallbackQuery, bot: Bot) -> None:
         user = require_callback_user(query)
         student_id_text = (query.data or "").replace(LESSON_PICK_PREFIX, "", 1)
-        if not student_id_text.isdigit():
+
+        try:
+            student_id = parse_uuid(student_id_text)
+        except ValueError:
             await query.answer("Некорректный ID", show_alert=True)
             return
 
         await query.answer()
-        await send_lesson_link(user.id, int(student_id_text), bot)
+        await send_lesson_link(user.id, student_id, bot)
 
     @dp.callback_query(F.data.startswith(SEND_STUDENT_PREFIX))
     async def handle_send_student(query: CallbackQuery, bot: Bot) -> None:
@@ -496,6 +685,7 @@ def build_dispatcher() -> Dispatcher:
 
     return dp
 
+
 _webhook_bot = None
 _webhook_dp = None
 _webhook_lock = asyncio.Lock()
@@ -503,9 +693,6 @@ _webhook_ready = False
 
 
 async def _ensure_webhook_runtime():
-    """
-    Инициализация бота/диспетчера один раз для режима webhook.
-    """
     global _webhook_bot, _webhook_dp, _webhook_ready
 
     if _webhook_ready:
@@ -515,7 +702,6 @@ async def _ensure_webhook_runtime():
         if _webhook_ready:
             return
 
-        # settings/init_db уже есть в файле выше (как в main())
         if not settings.bot_token:
             raise RuntimeError("BOT_TOKEN is required for bot service")
 
@@ -528,14 +714,11 @@ async def _ensure_webhook_runtime():
 
 
 async def process_update(update_dict: dict) -> None:
-    """
-    Вызывается из backend (/webhook). Получает dict апдейта Telegram
-    и прокидывает его в aiogram Dispatcher.
-    """
     await _ensure_webhook_runtime()
 
-    update = Update.model_validate(update_dict)  # aiogram v3 + pydantic v2
+    update = Update.model_validate(update_dict)
     await _webhook_dp.feed_update(_webhook_bot, update)
+
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)

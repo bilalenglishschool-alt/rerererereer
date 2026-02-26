@@ -498,29 +498,49 @@ def parse_dead_letter_failed_at_epoch(failed_at_raw: str) -> int:
     return int(parsed.timestamp())
 
 
+def parse_dead_letter_item(raw_item: str) -> dict[str, str]:
+    payload = {
+        "raw_item": str(raw_item),
+        "raw_task": "",
+        "task_type": "",
+        "lesson_id": "",
+        "reason": "",
+        "failed_at": "",
+    }
+
+    try:
+        parsed_item = json.loads(str(raw_item))
+    except json.JSONDecodeError:
+        return payload
+
+    if not isinstance(parsed_item, dict):
+        return payload
+
+    payload["raw_task"] = str(parsed_item.get("raw_task", "")).strip()
+    payload["task_type"] = str(parsed_item.get("task_type", "")).strip()
+    payload["lesson_id"] = str(parsed_item.get("lesson_id", "")).strip()
+    payload["reason"] = str(parsed_item.get("reason", "")).strip()
+    payload["failed_at"] = str(parsed_item.get("failed_at", "")).strip()
+
+    if payload["raw_task"] and (not payload["task_type"] or not payload["lesson_id"]):
+        task_type, lesson_id, _enqueued_at = parse_task_payload(payload["raw_task"])
+        if not payload["task_type"]:
+            payload["task_type"] = task_type
+        if not payload["lesson_id"]:
+            payload["lesson_id"] = lesson_id
+
+    return payload
+
+
 def collect_dead_letter_task_stats(redis_client) -> tuple[dict[str, int], dict[str, int]]:
     counts = {task_type: 0 for task_type in WORKER_KNOWN_TASK_TYPES}
     oldest_failed_at_ts = {task_type: 0 for task_type in WORKER_KNOWN_TASK_TYPES}
     raw_items = redis_client.lrange(LESSON_DEAD_LETTER_QUEUE_NAME, 0, -1) or []
 
     for raw_item in raw_items:
-        task_type = ""
-        failed_at_epoch = 0
-
-        try:
-            parsed_item = json.loads(str(raw_item))
-        except json.JSONDecodeError:
-            parsed_item = None
-
-        if isinstance(parsed_item, dict):
-            task_type = str(parsed_item.get("task_type", "")).strip()
-            failed_at_raw = parsed_item.get("failed_at")
-            if isinstance(failed_at_raw, str):
-                failed_at_epoch = parse_dead_letter_failed_at_epoch(failed_at_raw)
-
-            raw_task = str(parsed_item.get("raw_task", "")).strip()
-            if raw_task and (task_type not in WORKER_KNOWN_TASK_TYPES):
-                task_type, _lesson_id, _enqueued_at = parse_task_payload(raw_task)
+        parsed_item = parse_dead_letter_item(str(raw_item))
+        task_type = parsed_item.get("task_type", "")
+        failed_at_epoch = parse_dead_letter_failed_at_epoch(parsed_item.get("failed_at", ""))
 
         if task_type not in counts:
             continue
@@ -532,6 +552,82 @@ def collect_dead_letter_task_stats(redis_client) -> tuple[dict[str, int], dict[s
                 oldest_failed_at_ts[task_type] = failed_at_epoch
 
     return counts, oldest_failed_at_ts
+
+
+def list_dead_letter_items(
+    redis_client,
+    *,
+    limit: int,
+    task_type: str | None = None,
+    lesson_id: str | None = None,
+) -> list[dict[str, str]]:
+    requested_task_type = str(task_type or "").strip()
+    requested_lesson_id = str(lesson_id or "").strip()
+    raw_items = redis_client.lrange(LESSON_DEAD_LETTER_QUEUE_NAME, 0, -1) or []
+
+    items: list[dict[str, str]] = []
+    for raw_item in raw_items:
+        parsed = parse_dead_letter_item(str(raw_item))
+        current_task_type = parsed.get("task_type", "")
+        current_lesson_id = parsed.get("lesson_id", "")
+        raw_task = parsed.get("raw_task", "")
+
+        if not raw_task:
+            continue
+
+        if requested_task_type and current_task_type != requested_task_type:
+            continue
+        if requested_lesson_id and current_lesson_id != requested_lesson_id:
+            continue
+
+        items.append(parsed)
+        if len(items) >= limit:
+            break
+
+    return items
+
+
+def requeue_dead_letter_items(
+    redis_client,
+    *,
+    limit: int,
+    task_type: str | None = None,
+    lesson_id: str | None = None,
+) -> tuple[int, list[dict[str, str]]]:
+    requested_task_type = str(task_type or "").strip()
+    requested_lesson_id = str(lesson_id or "").strip()
+    raw_items = redis_client.lrange(LESSON_DEAD_LETTER_QUEUE_NAME, 0, -1) or []
+
+    selected: list[dict[str, str]] = []
+    for raw_item in reversed(raw_items):
+        parsed = parse_dead_letter_item(str(raw_item))
+        current_task_type = parsed.get("task_type", "")
+        current_lesson_id = parsed.get("lesson_id", "")
+        raw_task = parsed.get("raw_task", "")
+        if not raw_task:
+            continue
+
+        if requested_task_type and current_task_type != requested_task_type:
+            continue
+        if requested_lesson_id and current_lesson_id != requested_lesson_id:
+            continue
+
+        selected.append(parsed)
+        if len(selected) >= limit:
+            break
+
+    moved = 0
+    moved_items: list[dict[str, str]] = []
+    for item in selected:
+        removed = int(redis_client.lrem(LESSON_DEAD_LETTER_QUEUE_NAME, -1, item["raw_item"]) or 0)
+        if removed <= 0:
+            continue
+
+        redis_client.rpush(LESSON_QUEUE_NAME, item["raw_task"])
+        moved += 1
+        moved_items.append(item)
+
+    return moved, moved_items
 
 
 def collect_worker_metrics(redis_client) -> WorkerMetricsPayload:
@@ -968,6 +1064,81 @@ def worker_alerts() -> dict:
             ),
         },
         "metrics": metrics,
+    }
+
+
+@app.get("/ops/worker/dead-letter")
+def worker_dead_letter_list(
+    limit: int = Query(20, ge=1, le=200),
+    task_type: str | None = Query(None),
+    lesson_id: str | None = Query(None),
+) -> dict:
+    redis_client = None
+    try:
+        redis_client = get_redis_client(settings)
+        items = list_dead_letter_items(
+            redis_client,
+            limit=limit,
+            task_type=task_type,
+            lesson_id=lesson_id,
+        )
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail=f"Failed to read dead-letter queue: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"Failed to read dead-letter queue: {exc}") from exc
+    finally:
+        if redis_client is not None:
+            redis_client.close()
+
+    return {
+        "count": len(items),
+        "items": [
+            {
+                "task_type": item.get("task_type", ""),
+                "lesson_id": item.get("lesson_id", ""),
+                "reason": item.get("reason", ""),
+                "failed_at": item.get("failed_at", ""),
+            }
+            for item in items
+        ],
+    }
+
+
+@app.post("/ops/worker/dead-letter/requeue")
+def worker_dead_letter_requeue(
+    limit: int = Query(20, ge=1, le=200),
+    task_type: str | None = Query(None),
+    lesson_id: str | None = Query(None),
+) -> dict:
+    redis_client = None
+    try:
+        redis_client = get_redis_client(settings)
+        moved, moved_items = requeue_dead_letter_items(
+            redis_client,
+            limit=limit,
+            task_type=task_type,
+            lesson_id=lesson_id,
+        )
+    except RedisError as exc:
+        raise HTTPException(status_code=503, detail=f"Failed to requeue dead-letter tasks: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"Failed to requeue dead-letter tasks: {exc}") from exc
+    finally:
+        if redis_client is not None:
+            redis_client.close()
+
+    return {
+        "status": "ok",
+        "moved": moved,
+        "items": [
+            {
+                "task_type": item.get("task_type", ""),
+                "lesson_id": item.get("lesson_id", ""),
+                "reason": item.get("reason", ""),
+                "failed_at": item.get("failed_at", ""),
+            }
+            for item in moved_items
+        ],
     }
 
 

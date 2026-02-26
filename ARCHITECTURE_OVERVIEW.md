@@ -107,6 +107,9 @@ Retry/failure policy:
 - `/metrics/worker` включает per-task counters, per-task queue/processing depth и per-task latency/duration (`*_by_type`)
 - `/metrics/worker/prometheus` включает labeled counters, labeled queue/processing depth и labeled latency/duration by `task_type`
 - alert endpoint `GET /alerts/worker` (сравнение с threshold из env: errors/dead_letter/queue_depth/transcribe_queue_depth/transcribe_oldest_queue_age/transcribe_oldest_processing_age/transcribe_dead_letter/transcribe_oldest_dead_letter_age/heartbeat_age)
+- ops endpoints:
+  - `GET /ops/worker/dead-letter` (inspect dead-letter queue)
+  - `POST /ops/worker/dead-letter/requeue` (move dead-letter tasks back to `lesson_tasks`)
 - при недоступном Redis endpoints metrics/alerts возвращают `503`
 - external checker: `python -m tutor_assistant.ops.check_worker_alerts`
 - GitHub schedule monitor: `.github/workflows/worker-alert-monitor.yml` (секрет `WORKER_ALERT_URL`)

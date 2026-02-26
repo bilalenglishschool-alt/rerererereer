@@ -197,6 +197,9 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
   - `lesson_metrics:processing_duration_ms_samples:<task_type>`
 - Failure events (last-10m check): `lesson_metrics:worker_failures` (sorted set)
 - Dead-letter queue: `lesson_tasks:dead`
+- Dead-letter requeue counters:
+  - `lesson_metrics:dead_letter_requeued_total`
+  - `lesson_metrics:dead_letter_requeued_total:<task_type>`
 - HTTP endpoint:
   - `GET /metrics/worker`
   - `GET /metrics/worker/prometheus`
@@ -215,7 +218,7 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
     - `transcribe_oldest_dead_letter_age_seconds`
     - `worker_heartbeat_age_seconds`
   - `/metrics/worker` fields:
-    - `tasks_processed_total`, `task_failures_total`, `worker_errors_last_10m`
+    - `tasks_processed_total`, `task_failures_total`, `dead_letter_requeued_total`, `worker_errors_last_10m`
     - `queue_depth`, `processing_depth`, `dead_letter_depth`
     - `transcribe_queue_depth`, `transcribe_processing_depth`, `transcribe_oldest_queue_age_seconds`, `transcribe_oldest_processing_age_seconds`, `transcribe_dead_letter_depth`, `transcribe_oldest_dead_letter_age_seconds`
     - `queue_depth_by_type`, `processing_depth_by_type`, `dead_letter_depth_by_type`
@@ -224,7 +227,7 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
     - `processing_duration_ms_last`, `processing_duration_ms_max`, `processing_duration_ms_avg`
     - `processing_duration_ms_last_by_type`, `processing_duration_ms_max_by_type`, `processing_duration_ms_avg_by_type`
     - `worker_heartbeat_ts`, `worker_heartbeat_age_seconds`
-    - `tasks_processed_by_type`, `task_failures_by_type`
+    - `tasks_processed_by_type`, `task_failures_by_type`, `dead_letter_requeued_by_type`
   - `/metrics/worker/prometheus`:
     - text format `text/plain; version=0.0.4`
     - ready for Prometheus scrape

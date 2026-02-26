@@ -36,6 +36,7 @@ from .queue import (
     WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY,
     WORKER_METRIC_TASKS_FAILED_KEY,
     WORKER_METRIC_TASKS_PROCESSED_KEY,
+    build_task_payload,
     enqueue_process_lesson,
     get_redis_client,
     parse_task_payload,
@@ -623,7 +624,15 @@ def requeue_dead_letter_items(
         if removed <= 0:
             continue
 
-        redis_client.rpush(LESSON_QUEUE_NAME, item["raw_task"])
+        queued_raw_task = str(item.get("raw_task", "")).strip()
+        queue_task_type, queue_lesson_id, _queue_enqueued_at = parse_task_payload(queued_raw_task)
+        if queue_lesson_id:
+            queued_raw_task = build_task_payload(
+                lesson_id=queue_lesson_id,
+                task_type=queue_task_type,
+            )
+
+        redis_client.rpush(LESSON_QUEUE_NAME, queued_raw_task)
         moved += 1
         moved_items.append(item)
 

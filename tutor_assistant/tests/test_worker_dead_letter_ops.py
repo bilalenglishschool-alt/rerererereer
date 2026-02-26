@@ -25,10 +25,11 @@ def _build_dead_item(
     lesson_id: str,
     failed_at: str,
     reason: str,
+    raw_task: str | None = None,
 ) -> str:
     return json.dumps(
         {
-            "raw_task": build_task_payload(lesson_id=lesson_id, task_type=task_type),
+            "raw_task": raw_task or build_task_payload(lesson_id=lesson_id, task_type=task_type),
             "reason": reason,
             "task_type": task_type,
             "lesson_id": lesson_id,
@@ -150,6 +151,11 @@ class WorkerDeadLetterOpsTest(unittest.TestCase):
             lesson_id="job-old",
             failed_at="1970-01-01T00:33:00+00:00",
             reason="old",
+            raw_task=build_task_payload(
+                lesson_id="job-old",
+                task_type=TASK_TRANSCRIBE_JOB,
+                enqueued_at=1000,
+            ),
         )
         transcribe_newest = _build_dead_item(
             task_type=TASK_TRANSCRIBE_JOB,
@@ -186,9 +192,11 @@ class WorkerDeadLetterOpsTest(unittest.TestCase):
 
         queue_items = redis_stub.queue_items(LESSON_QUEUE_NAME)
         self.assertEqual(len(queue_items), 1)
-        queued_task_type, queued_lesson_id, _enqueued_at = parse_task_payload(queue_items[0])
+        queued_task_type, queued_lesson_id, queued_enqueued_at = parse_task_payload(queue_items[0])
         self.assertEqual(queued_task_type, TASK_TRANSCRIBE_JOB)
         self.assertEqual(queued_lesson_id, "job-old")
+        self.assertIsNotNone(queued_enqueued_at)
+        self.assertGreater(int(queued_enqueued_at or 0), 1000)
         self.assertTrue(redis_stub.closed)
 
     def test_ops_endpoints_return_503_when_redis_unavailable(self) -> None:

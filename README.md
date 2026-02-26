@@ -203,6 +203,7 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
   - `GET /alerts/worker`
   - `GET /ops/worker/dead-letter` (просмотр dead-letter с фильтрами `task_type`, `lesson_id`)
   - `POST /ops/worker/dead-letter/requeue` (ручной requeue из dead-letter обратно в `lesson_tasks`)
+  - при requeue `enqueued_at` в queue payload обновляется на текущее время
   - для `/ops/worker/*`: если `OPS_API_TOKEN` задан, обязателен заголовок `X-Ops-Token`
   - `/alerts/worker` thresholds:
     - `worker_errors_last_10m`

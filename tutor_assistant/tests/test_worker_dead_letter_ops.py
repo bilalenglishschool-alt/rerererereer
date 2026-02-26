@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -106,6 +107,12 @@ class _DeadLetterRedisStub:
 
 
 class WorkerDeadLetterOpsTest(unittest.TestCase):
+    def _settings_with_ops_token(self, token: str):
+        return patch(
+            "tutor_assistant.backend.settings",
+            SimpleNamespace(ops_api_token=token),
+        )
+
     def test_list_dead_letter_items_with_filter(self) -> None:
         redis_stub = _DeadLetterRedisStub(
             dead_letter_items=[
@@ -197,6 +204,39 @@ class WorkerDeadLetterOpsTest(unittest.TestCase):
             "Failed to requeue dead-letter tasks",
             requeue_response.json().get("detail", ""),
         )
+
+    def test_ops_endpoints_require_token_when_configured(self) -> None:
+        redis_stub = _DeadLetterRedisStub(dead_letter_items=[])
+        with self._settings_with_ops_token("ops-secret"):
+            with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+                with TestClient(app) as client:
+                    list_response = client.get("/ops/worker/dead-letter")
+                    requeue_response = client.post("/ops/worker/dead-letter/requeue")
+
+        self.assertEqual(list_response.status_code, 401)
+        self.assertEqual(requeue_response.status_code, 401)
+        self.assertIn("Invalid ops token", list_response.json().get("detail", ""))
+        self.assertIn("Invalid ops token", requeue_response.json().get("detail", ""))
+        self.assertFalse(redis_stub.closed)
+
+    def test_ops_endpoints_accept_valid_token(self) -> None:
+        redis_stub = _DeadLetterRedisStub(dead_letter_items=[])
+        with self._settings_with_ops_token("ops-secret"):
+            with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+                with TestClient(app) as client:
+                    list_response = client.get(
+                        "/ops/worker/dead-letter",
+                        headers={"X-Ops-Token": "ops-secret"},
+                    )
+                    requeue_response = client.post(
+                        "/ops/worker/dead-letter/requeue",
+                        headers={"X-Ops-Token": "ops-secret"},
+                    )
+
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(requeue_response.status_code, 200)
+        self.assertEqual(list_response.json().get("count"), 0)
+        self.assertEqual(requeue_response.json().get("moved"), 0)
 
 
 if __name__ == "__main__":

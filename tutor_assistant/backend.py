@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 from redis.exceptions import RedisError
@@ -993,6 +993,17 @@ def load_worker_metrics_or_503() -> WorkerMetricsPayload:
             redis_client.close()
 
 
+def require_ops_token(
+    x_ops_token: str | None = Header(default=None, alias="X-Ops-Token"),
+) -> None:
+    expected_token = str(settings.ops_api_token or "").strip()
+    if not expected_token:
+        return
+
+    if str(x_ops_token or "").strip() != expected_token:
+        raise HTTPException(status_code=401, detail="Invalid ops token")
+
+
 @app.get("/health")
 def health(db: Session = Depends(get_db)) -> dict:
     postgres_ok = False
@@ -1072,6 +1083,7 @@ def worker_dead_letter_list(
     limit: int = Query(20, ge=1, le=200),
     task_type: str | None = Query(None),
     lesson_id: str | None = Query(None),
+    _ops_guard: None = Depends(require_ops_token),
 ) -> dict:
     redis_client = None
     try:
@@ -1109,6 +1121,7 @@ def worker_dead_letter_requeue(
     limit: int = Query(20, ge=1, le=200),
     task_type: str | None = Query(None),
     lesson_id: str | None = Query(None),
+    _ops_guard: None = Depends(require_ops_token),
 ) -> dict:
     redis_client = None
     try:

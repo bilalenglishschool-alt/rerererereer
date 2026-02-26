@@ -110,6 +110,7 @@ Retry/failure policy:
 - ops endpoints:
   - `GET /ops/worker/dead-letter` (inspect dead-letter queue)
   - `POST /ops/worker/dead-letter/requeue` (move dead-letter tasks back to `lesson_tasks`)
+  - if `OPS_API_TOKEN` is configured, `/ops/worker/*` requires `X-Ops-Token`
 - при недоступном Redis endpoints metrics/alerts возвращают `503`
 - external checker: `python -m tutor_assistant.ops.check_worker_alerts`
 - GitHub schedule monitor: `.github/workflows/worker-alert-monitor.yml` (секрет `WORKER_ALERT_URL`)

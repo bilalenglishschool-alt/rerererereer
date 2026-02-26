@@ -32,6 +32,8 @@ Docker Compose проект с сервисами:
 - `WORKER_ALERT_TRANSCRIBE_QUEUE_DEPTH_THRESHOLD` (по умолчанию `10`)
 - `WORKER_ALERT_TRANSCRIBE_OLDEST_QUEUE_AGE_SECONDS_THRESHOLD` (по умолчанию `300`)
 - `WORKER_ALERT_TRANSCRIBE_OLDEST_PROCESSING_AGE_SECONDS_THRESHOLD` (по умолчанию `600`)
+- `WORKER_ALERT_TRANSCRIBE_DEAD_LETTER_THRESHOLD` (по умолчанию `0`)
+- `WORKER_ALERT_TRANSCRIBE_OLDEST_DEAD_LETTER_AGE_SECONDS_THRESHOLD` (по умолчанию `600`)
 - `WORKER_ALERT_HEARTBEAT_AGE_SECONDS_THRESHOLD` (по умолчанию `120`)
 - `POSTGRES_DB`
 - `POSTGRES_USER`
@@ -205,12 +207,14 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
     - `transcribe_queue_depth`
     - `transcribe_oldest_queue_age_seconds`
     - `transcribe_oldest_processing_age_seconds`
+    - `transcribe_dead_letter_depth`
+    - `transcribe_oldest_dead_letter_age_seconds`
     - `worker_heartbeat_age_seconds`
   - `/metrics/worker` fields:
     - `tasks_processed_total`, `task_failures_total`, `worker_errors_last_10m`
     - `queue_depth`, `processing_depth`, `dead_letter_depth`
-    - `transcribe_queue_depth`, `transcribe_processing_depth`, `transcribe_oldest_queue_age_seconds`, `transcribe_oldest_processing_age_seconds`
-    - `queue_depth_by_type`, `processing_depth_by_type`
+    - `transcribe_queue_depth`, `transcribe_processing_depth`, `transcribe_oldest_queue_age_seconds`, `transcribe_oldest_processing_age_seconds`, `transcribe_dead_letter_depth`, `transcribe_oldest_dead_letter_age_seconds`
+    - `queue_depth_by_type`, `processing_depth_by_type`, `dead_letter_depth_by_type`
     - `queue_latency_ms_last`, `queue_latency_ms_max`, `queue_latency_ms_avg`
     - `queue_latency_ms_last_by_type`, `queue_latency_ms_max_by_type`, `queue_latency_ms_avg_by_type`
     - `processing_duration_ms_last`, `processing_duration_ms_max`, `processing_duration_ms_avg`

@@ -131,6 +131,7 @@ docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
   - alerts thresholds: `worker_errors_last_10m`, `dead_letter_depth`, `queue_depth`, `transcribe_queue_depth`, `transcribe_oldest_queue_age_seconds`, `transcribe_oldest_processing_age_seconds`, `transcribe_dead_letter_depth`, `transcribe_oldest_dead_letter_age_seconds`, `worker_heartbeat_age_seconds`
   - при недоступном Redis endpoints worker metrics/alerts возвращают `503`
   - fields: `tasks_processed_total`, `task_failures_total`, `worker_errors_last_10m`,
+    `dead_letter_requeued_total`,
     `queue_depth`, `processing_depth`, `dead_letter_depth`,
     `transcribe_queue_depth`, `transcribe_processing_depth`, `transcribe_oldest_queue_age_seconds`, `transcribe_oldest_processing_age_seconds`, `transcribe_dead_letter_depth`, `transcribe_oldest_dead_letter_age_seconds`,
     `queue_depth_by_type`, `processing_depth_by_type`, `dead_letter_depth_by_type`,
@@ -138,7 +139,7 @@ docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
     `queue_latency_ms_last_by_type/max_by_type/avg_by_type`,
     `processing_duration_ms_last_by_type/max_by_type/avg_by_type`,
     `worker_heartbeat_ts`, `worker_heartbeat_age_seconds`,
-    `tasks_processed_by_type`, `task_failures_by_type`
+    `tasks_processed_by_type`, `task_failures_by_type`, `dead_letter_requeued_by_type`
   - Prometheus format: text `version=0.0.4`
   - Prometheus includes labeled counters and labeled latency/duration gauges by `task_type`
 - External monitor helper:

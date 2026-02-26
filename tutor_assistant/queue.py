@@ -28,6 +28,7 @@ WORKER_METRIC_PROCESSING_DURATION_MAX_MS_KEY = "lesson_metrics:processing_durati
 WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY = "lesson_metrics:processing_duration_ms_sum"
 WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY = "lesson_metrics:processing_duration_ms_samples"
 WORKER_METRIC_HEARTBEAT_TS_KEY = "lesson_metrics:worker_heartbeat_ts"
+WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY = "lesson_metrics:dead_letter_requeued_total"
 
 
 def get_redis_client(settings: Settings) -> Redis:

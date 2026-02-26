@@ -30,12 +30,14 @@ from .queue import (
     WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY,
     WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY,
     WORKER_METRIC_HEARTBEAT_TS_KEY,
+    WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY,
     WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY,
     WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY,
     WORKER_METRIC_TASKS_FAILED_KEY,
     WORKER_METRIC_TASKS_PROCESSED_KEY,
+    build_task_payload,
     enqueue_process_lesson,
     get_redis_client,
     parse_task_payload,
@@ -88,6 +90,12 @@ WORKER_PROMETHEUS_METRICS: tuple[tuple[str, str, str, str], ...] = (
         "tutor_assistant_worker_task_failures_total",
         "counter",
         "Total number of failed worker tasks.",
+    ),
+    (
+        "dead_letter_requeued_total",
+        "tutor_assistant_worker_dead_letter_requeued_total",
+        "counter",
+        "Total number of dead-letter tasks requeued back to lesson_tasks.",
     ),
     (
         "worker_errors_last_10m",
@@ -623,7 +631,18 @@ def requeue_dead_letter_items(
         if removed <= 0:
             continue
 
-        redis_client.rpush(LESSON_QUEUE_NAME, item["raw_task"])
+        queued_raw_task = str(item.get("raw_task", "")).strip()
+        queue_task_type, queue_lesson_id, _queue_enqueued_at = parse_task_payload(queued_raw_task)
+        if queue_lesson_id:
+            queued_raw_task = build_task_payload(
+                lesson_id=queue_lesson_id,
+                task_type=queue_task_type,
+            )
+
+        redis_client.rpush(LESSON_QUEUE_NAME, queued_raw_task)
+        redis_client.incr(WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY)
+        if queue_task_type in WORKER_KNOWN_TASK_TYPES:
+            redis_client.incr(f"{WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY}:{queue_task_type}")
         moved += 1
         moved_items.append(item)
 
@@ -709,6 +728,9 @@ def collect_worker_metrics(redis_client) -> WorkerMetricsPayload:
     return {
         "tasks_processed_total": int(redis_client.get(WORKER_METRIC_TASKS_PROCESSED_KEY) or 0),
         "task_failures_total": int(redis_client.get(WORKER_METRIC_TASKS_FAILED_KEY) or 0),
+        "dead_letter_requeued_total": int(
+            redis_client.get(WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY) or 0
+        ),
         "worker_errors_last_10m": int(
             redis_client.zcount(WORKER_FAILURE_EVENTS_ZSET_KEY, ten_minutes_ago, now_ts)
         ),
@@ -741,6 +763,10 @@ def collect_worker_metrics(redis_client) -> WorkerMetricsPayload:
         "transcribe_oldest_dead_letter_age_seconds": transcribe_oldest_dead_letter_age_seconds,
         "tasks_processed_by_type": tasks_processed_by_type,
         "task_failures_by_type": task_failures_by_type,
+        "dead_letter_requeued_by_type": collect_task_type_counters(
+            redis_client,
+            WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY,
+        ),
         "queue_depth_by_type": queue_depth_by_type,
         "processing_depth_by_type": processing_depth_by_type,
         "dead_letter_depth_by_type": dead_letter_depth_by_type,
@@ -813,6 +839,13 @@ def render_worker_metrics_prometheus(metrics: WorkerMetricsPayload) -> str:
         metric_type="counter",
         metric_help="Total number of failed worker tasks by task type.",
         values=get_metrics_by_task_type(metrics, "task_failures_by_type"),
+    )
+    append_prometheus_metric_by_task_type(
+        lines,
+        metric_name="tutor_assistant_worker_dead_letter_requeued_by_type_total",
+        metric_type="counter",
+        metric_help="Total number of dead-letter tasks requeued by task type.",
+        values=get_metrics_by_task_type(metrics, "dead_letter_requeued_by_type"),
     )
     append_prometheus_metric_by_task_type(
         lines,

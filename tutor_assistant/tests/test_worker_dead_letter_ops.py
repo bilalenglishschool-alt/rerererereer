@@ -14,6 +14,7 @@ from tutor_assistant.queue import (
     LESSON_QUEUE_NAME,
     TASK_GENERATE_ARTIFACTS,
     TASK_TRANSCRIBE_JOB,
+    WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY,
     build_task_payload,
     parse_task_payload,
 )
@@ -25,10 +26,11 @@ def _build_dead_item(
     lesson_id: str,
     failed_at: str,
     reason: str,
+    raw_task: str | None = None,
 ) -> str:
     return json.dumps(
         {
-            "raw_task": build_task_payload(lesson_id=lesson_id, task_type=task_type),
+            "raw_task": raw_task or build_task_payload(lesson_id=lesson_id, task_type=task_type),
             "reason": reason,
             "task_type": task_type,
             "lesson_id": lesson_id,
@@ -50,6 +52,7 @@ class _DeadLetterRedisStub:
             LESSON_DEAD_LETTER_QUEUE_NAME: list(dead_letter_items or []),
             LESSON_QUEUE_NAME: list(queue_items or []),
         }
+        self._values: dict[str, int] = {}
         self.closed = False
 
     def lrange(self, key: str, start: int, end: int):  # noqa: ANN001
@@ -99,11 +102,20 @@ class _DeadLetterRedisStub:
         self._queues.setdefault(key, []).append(value)
         return len(self._queues[key])
 
+    def incr(self, key: str):  # noqa: ANN001
+        current_value = int(self._values.get(key, 0))
+        next_value = current_value + 1
+        self._values[key] = next_value
+        return next_value
+
     def close(self) -> None:
         self.closed = True
 
     def queue_items(self, key: str) -> list[str]:
         return list(self._queues.get(key, []))
+
+    def value(self, key: str) -> int:
+        return int(self._values.get(key, 0))
 
 
 class WorkerDeadLetterOpsTest(unittest.TestCase):
@@ -150,6 +162,11 @@ class WorkerDeadLetterOpsTest(unittest.TestCase):
             lesson_id="job-old",
             failed_at="1970-01-01T00:33:00+00:00",
             reason="old",
+            raw_task=build_task_payload(
+                lesson_id="job-old",
+                task_type=TASK_TRANSCRIBE_JOB,
+                enqueued_at=1000,
+            ),
         )
         transcribe_newest = _build_dead_item(
             task_type=TASK_TRANSCRIBE_JOB,
@@ -186,9 +203,16 @@ class WorkerDeadLetterOpsTest(unittest.TestCase):
 
         queue_items = redis_stub.queue_items(LESSON_QUEUE_NAME)
         self.assertEqual(len(queue_items), 1)
-        queued_task_type, queued_lesson_id, _enqueued_at = parse_task_payload(queue_items[0])
+        queued_task_type, queued_lesson_id, queued_enqueued_at = parse_task_payload(queue_items[0])
         self.assertEqual(queued_task_type, TASK_TRANSCRIBE_JOB)
         self.assertEqual(queued_lesson_id, "job-old")
+        self.assertIsNotNone(queued_enqueued_at)
+        self.assertGreater(int(queued_enqueued_at or 0), 1000)
+        self.assertEqual(redis_stub.value(WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY), 1)
+        self.assertEqual(
+            redis_stub.value(f"{WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY}:{TASK_TRANSCRIBE_JOB}"),
+            1,
+        )
         self.assertTrue(redis_stub.closed)
 
     def test_ops_endpoints_return_503_when_redis_unavailable(self) -> None:

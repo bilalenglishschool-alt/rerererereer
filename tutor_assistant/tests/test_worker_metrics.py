@@ -21,6 +21,7 @@ from tutor_assistant.queue import (
     WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY,
     WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY,
     WORKER_METRIC_HEARTBEAT_TS_KEY,
+    WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY,
     WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY,
@@ -82,12 +83,16 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
                 WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY: 301,
                 WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY: 2,
                 WORKER_METRIC_HEARTBEAT_TS_KEY: 1995,
+                WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY: 9,
                 f"{WORKER_METRIC_TASKS_PROCESSED_KEY}:{TASK_PROCESS_AUDIO}": 11,
                 f"{WORKER_METRIC_TASKS_PROCESSED_KEY}:{TASK_GENERATE_ARTIFACTS}": 22,
                 f"{WORKER_METRIC_TASKS_PROCESSED_KEY}:{TASK_TRANSCRIBE_JOB}": 33,
                 f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_PROCESS_AUDIO}": 1,
                 f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_GENERATE_ARTIFACTS}": 2,
                 f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_TRANSCRIBE_JOB}": 0,
+                f"{WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY}:{TASK_PROCESS_AUDIO}": 3,
+                f"{WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY}:{TASK_GENERATE_ARTIFACTS}": 2,
+                f"{WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY}:{TASK_TRANSCRIBE_JOB}": 4,
                 f"{WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY}:{TASK_PROCESS_AUDIO}": 45,
                 f"{WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY}:{TASK_GENERATE_ARTIFACTS}": 60,
                 f"{WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY}:{TASK_TRANSCRIBE_JOB}": 90,
@@ -159,6 +164,7 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["tasks_processed_total"], 44)
         self.assertEqual(payload["task_failures_total"], 3)
+        self.assertEqual(payload["dead_letter_requeued_total"], 9)
         self.assertEqual(payload["worker_errors_last_10m"], 2)
         self.assertEqual(payload["queue_depth"], 4)
         self.assertEqual(payload["processing_depth"], 1)
@@ -265,6 +271,14 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
                 TASK_TRANSCRIBE_JOB: 0,
             },
         )
+        self.assertEqual(
+            payload["dead_letter_requeued_by_type"],
+            {
+                TASK_PROCESS_AUDIO: 3,
+                TASK_GENERATE_ARTIFACTS: 2,
+                TASK_TRANSCRIBE_JOB: 4,
+            },
+        )
         self.assertTrue(redis_stub.closed)
 
     def test_metrics_avg_fields_are_zero_when_no_samples(self) -> None:
@@ -284,6 +298,7 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["queue_latency_ms_avg"], 0.0)
         self.assertEqual(payload["processing_duration_ms_avg"], 0.0)
+        self.assertEqual(payload["dead_letter_requeued_total"], 0)
         self.assertEqual(payload["worker_heartbeat_age_seconds"], -1)
         self.assertEqual(payload["transcribe_queue_depth"], 0)
         self.assertEqual(payload["transcribe_processing_depth"], 0)
@@ -291,6 +306,14 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["transcribe_oldest_processing_age_seconds"], -1)
         self.assertEqual(payload["transcribe_dead_letter_depth"], 0)
         self.assertEqual(payload["transcribe_oldest_dead_letter_age_seconds"], -1)
+        self.assertEqual(
+            payload["dead_letter_requeued_by_type"],
+            {
+                TASK_PROCESS_AUDIO: 0,
+                TASK_GENERATE_ARTIFACTS: 0,
+                TASK_TRANSCRIBE_JOB: 0,
+            },
+        )
         self.assertEqual(
             payload["queue_latency_ms_avg_by_type"],
             {
@@ -332,12 +355,16 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
                 WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY: 301,
                 WORKER_METRIC_PROCESSING_DURATION_SAMPLES_KEY: 2,
                 WORKER_METRIC_HEARTBEAT_TS_KEY: 1995,
+                WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY: 9,
                 f"{WORKER_METRIC_TASKS_PROCESSED_KEY}:{TASK_PROCESS_AUDIO}": 11,
                 f"{WORKER_METRIC_TASKS_PROCESSED_KEY}:{TASK_GENERATE_ARTIFACTS}": 22,
                 f"{WORKER_METRIC_TASKS_PROCESSED_KEY}:{TASK_TRANSCRIBE_JOB}": 33,
                 f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_PROCESS_AUDIO}": 1,
                 f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_GENERATE_ARTIFACTS}": 2,
                 f"{WORKER_METRIC_TASKS_FAILED_KEY}:{TASK_TRANSCRIBE_JOB}": 0,
+                f"{WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY}:{TASK_PROCESS_AUDIO}": 3,
+                f"{WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY}:{TASK_GENERATE_ARTIFACTS}": 2,
+                f"{WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY}:{TASK_TRANSCRIBE_JOB}": 4,
                 f"{WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY}:{TASK_PROCESS_AUDIO}": 45,
                 f"{WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY}:{TASK_GENERATE_ARTIFACTS}": 60,
                 f"{WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY}:{TASK_TRANSCRIBE_JOB}": 90,
@@ -416,6 +443,10 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
             body,
         )
         self.assertIn(
+            "tutor_assistant_worker_dead_letter_requeued_total 9",
+            body,
+        )
+        self.assertIn(
             "tutor_assistant_worker_queue_depth 4",
             body,
         )
@@ -481,6 +512,18 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         )
         self.assertIn(
             f'tutor_assistant_worker_task_failures_by_type_total{{task_type="{TASK_TRANSCRIBE_JOB}"}} 0',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_dead_letter_requeued_by_type_total{{task_type="{TASK_PROCESS_AUDIO}"}} 3',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_dead_letter_requeued_by_type_total{{task_type="{TASK_GENERATE_ARTIFACTS}"}} 2',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_dead_letter_requeued_by_type_total{{task_type="{TASK_TRANSCRIBE_JOB}"}} 4',
             body,
         )
         self.assertIn(

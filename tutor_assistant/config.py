@@ -11,6 +11,7 @@ class Settings:
     bot_token: str
     base_url: str
     storage_path: Path
+    ops_api_token: str
     llm_provider: str
     llm_api_key: str
     whisper_model: str
@@ -115,6 +116,7 @@ def get_settings() -> Settings:
         bot_token=os.getenv("BOT_TOKEN", "").strip(),
         base_url=os.getenv("BASE_URL", "http://localhost:8000").rstrip("/"),
         storage_path=storage_path,
+        ops_api_token=os.getenv("OPS_API_TOKEN", "").strip(),
         llm_provider=os.getenv("LLM_PROVIDER", "none").strip().lower() or "none",
         llm_api_key=os.getenv("LLM_API_KEY", "").strip(),
         whisper_model=os.getenv("WHISPER_MODEL", "base").strip() or "base",

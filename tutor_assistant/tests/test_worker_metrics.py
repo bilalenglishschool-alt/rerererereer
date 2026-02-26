@@ -123,7 +123,8 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
                     "legacy-lesson-4",
                 ],
                 LESSON_PROCESSING_QUEUE_NAME: [
-                    build_task_payload("lesson-5", TASK_TRANSCRIBE_JOB),
+                    build_task_payload("lesson-5", TASK_TRANSCRIBE_JOB, enqueued_at=1997000),
+                    build_task_payload("lesson-6", TASK_GENERATE_ARTIFACTS),
                 ],
             },
         )
@@ -152,6 +153,7 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["transcribe_queue_depth"], 1)
         self.assertEqual(payload["transcribe_processing_depth"], 1)
         self.assertEqual(payload["transcribe_oldest_queue_age_seconds"], 14)
+        self.assertEqual(payload["transcribe_oldest_processing_age_seconds"], 3)
         self.assertEqual(
             payload["queue_latency_ms_last_by_type"],
             {
@@ -220,7 +222,7 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
             payload["processing_depth_by_type"],
             {
                 TASK_PROCESS_AUDIO: 0,
-                TASK_GENERATE_ARTIFACTS: 0,
+                TASK_GENERATE_ARTIFACTS: 1,
                 TASK_TRANSCRIBE_JOB: 1,
             },
         )
@@ -255,6 +257,7 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["transcribe_queue_depth"], 0)
         self.assertEqual(payload["transcribe_processing_depth"], 0)
         self.assertEqual(payload["transcribe_oldest_queue_age_seconds"], -1)
+        self.assertEqual(payload["transcribe_oldest_processing_age_seconds"], -1)
         self.assertEqual(
             payload["queue_latency_ms_avg_by_type"],
             {
@@ -338,7 +341,8 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
                     "legacy-lesson-4",
                 ],
                 LESSON_PROCESSING_QUEUE_NAME: [
-                    build_task_payload("lesson-5", TASK_TRANSCRIBE_JOB),
+                    build_task_payload("lesson-5", TASK_TRANSCRIBE_JOB, enqueued_at=1997000),
+                    build_task_payload("lesson-6", TASK_GENERATE_ARTIFACTS),
                 ],
             },
         )
@@ -372,6 +376,10 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         )
         self.assertIn(
             "tutor_assistant_worker_transcribe_oldest_queue_age_seconds 14",
+            body,
+        )
+        self.assertIn(
+            "tutor_assistant_worker_transcribe_oldest_processing_age_seconds 3",
             body,
         )
         self.assertIn(

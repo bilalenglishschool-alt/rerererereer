@@ -200,6 +200,8 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
   - `GET /metrics/worker`
   - `GET /metrics/worker/prometheus`
   - `GET /alerts/worker`
+  - `GET /ops/worker/dead-letter` (просмотр dead-letter с фильтрами `task_type`, `lesson_id`)
+  - `POST /ops/worker/dead-letter/requeue` (ручной requeue из dead-letter обратно в `lesson_tasks`)
   - `/alerts/worker` thresholds:
     - `worker_errors_last_10m`
     - `dead_letter_depth`

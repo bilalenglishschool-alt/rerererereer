@@ -27,6 +27,7 @@
 - Webhook privacy regression test (metadata-only logging).
 - Worker retry/dead-letter policy + reliability counters (включая per-task counters и per-task latency/duration).
 - Endpoint alerting: `GET /alerts/worker` по порогам `worker_errors_last_10m`, `dead_letter_depth`, `queue_depth`, `transcribe_queue_depth`, `transcribe_oldest_queue_age_seconds`, `transcribe_oldest_processing_age_seconds`, `transcribe_dead_letter_depth`, `transcribe_oldest_dead_letter_age_seconds`, `worker_heartbeat_age_seconds`.
+- Ops endpoints для dead-letter: `GET /ops/worker/dead-letter`, `POST /ops/worker/dead-letter/requeue`.
 - Whisper transcription jobs:
   - `POST /api/transcribe/jobs`
   - `GET /api/transcribe/jobs`

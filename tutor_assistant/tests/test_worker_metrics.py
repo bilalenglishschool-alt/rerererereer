@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from unittest.mock import patch
 
@@ -114,7 +115,7 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
             },
             queue_depth=4,
             processing_depth=1,
-            dead_letter_depth=0,
+            dead_letter_depth=2,
             queue_items={
                 LESSON_QUEUE_NAME: [
                     build_task_payload("lesson-1", TASK_TRANSCRIBE_JOB, enqueued_at=1986000),
@@ -125,6 +126,26 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
                 LESSON_PROCESSING_QUEUE_NAME: [
                     build_task_payload("lesson-5", TASK_TRANSCRIBE_JOB, enqueued_at=1997000),
                     build_task_payload("lesson-6", TASK_GENERATE_ARTIFACTS),
+                ],
+                LESSON_DEAD_LETTER_QUEUE_NAME: [
+                    json.dumps(
+                        {
+                            "raw_task": build_task_payload("lesson-7", TASK_TRANSCRIBE_JOB),
+                            "reason": "x",
+                            "task_type": TASK_TRANSCRIBE_JOB,
+                            "lesson_id": "lesson-7",
+                            "failed_at": "1970-01-01T00:33:00+00:00",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "raw_task": build_task_payload("lesson-8", TASK_PROCESS_AUDIO),
+                            "reason": "y",
+                            "task_type": TASK_PROCESS_AUDIO,
+                            "lesson_id": "lesson-8",
+                            "failed_at": "1970-01-01T00:33:15+00:00",
+                        }
+                    ),
                 ],
             },
         )
@@ -141,7 +162,7 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["worker_errors_last_10m"], 2)
         self.assertEqual(payload["queue_depth"], 4)
         self.assertEqual(payload["processing_depth"], 1)
-        self.assertEqual(payload["dead_letter_depth"], 0)
+        self.assertEqual(payload["dead_letter_depth"], 2)
         self.assertEqual(payload["queue_latency_ms_last"], 50)
         self.assertEqual(payload["queue_latency_ms_max"], 120)
         self.assertEqual(payload["queue_latency_ms_avg"], 70.0)
@@ -154,6 +175,8 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["transcribe_processing_depth"], 1)
         self.assertEqual(payload["transcribe_oldest_queue_age_seconds"], 14)
         self.assertEqual(payload["transcribe_oldest_processing_age_seconds"], 3)
+        self.assertEqual(payload["transcribe_dead_letter_depth"], 1)
+        self.assertEqual(payload["transcribe_oldest_dead_letter_age_seconds"], 20)
         self.assertEqual(
             payload["queue_latency_ms_last_by_type"],
             {
@@ -227,6 +250,14 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
             },
         )
         self.assertEqual(
+            payload["dead_letter_depth_by_type"],
+            {
+                TASK_PROCESS_AUDIO: 1,
+                TASK_GENERATE_ARTIFACTS: 0,
+                TASK_TRANSCRIBE_JOB: 1,
+            },
+        )
+        self.assertEqual(
             payload["task_failures_by_type"],
             {
                 TASK_PROCESS_AUDIO: 1,
@@ -258,6 +289,8 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["transcribe_processing_depth"], 0)
         self.assertEqual(payload["transcribe_oldest_queue_age_seconds"], -1)
         self.assertEqual(payload["transcribe_oldest_processing_age_seconds"], -1)
+        self.assertEqual(payload["transcribe_dead_letter_depth"], 0)
+        self.assertEqual(payload["transcribe_oldest_dead_letter_age_seconds"], -1)
         self.assertEqual(
             payload["queue_latency_ms_avg_by_type"],
             {
@@ -332,7 +365,7 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
             },
             queue_depth=4,
             processing_depth=1,
-            dead_letter_depth=0,
+            dead_letter_depth=2,
             queue_items={
                 LESSON_QUEUE_NAME: [
                     build_task_payload("lesson-1", TASK_TRANSCRIBE_JOB, enqueued_at=1986000),
@@ -343,6 +376,26 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
                 LESSON_PROCESSING_QUEUE_NAME: [
                     build_task_payload("lesson-5", TASK_TRANSCRIBE_JOB, enqueued_at=1997000),
                     build_task_payload("lesson-6", TASK_GENERATE_ARTIFACTS),
+                ],
+                LESSON_DEAD_LETTER_QUEUE_NAME: [
+                    json.dumps(
+                        {
+                            "raw_task": build_task_payload("lesson-7", TASK_TRANSCRIBE_JOB),
+                            "reason": "x",
+                            "task_type": TASK_TRANSCRIBE_JOB,
+                            "lesson_id": "lesson-7",
+                            "failed_at": "1970-01-01T00:33:00+00:00",
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "raw_task": build_task_payload("lesson-8", TASK_PROCESS_AUDIO),
+                            "reason": "y",
+                            "task_type": TASK_PROCESS_AUDIO,
+                            "lesson_id": "lesson-8",
+                            "failed_at": "1970-01-01T00:33:15+00:00",
+                        }
+                    ),
                 ],
             },
         )
@@ -380,6 +433,14 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         )
         self.assertIn(
             "tutor_assistant_worker_transcribe_oldest_processing_age_seconds 3",
+            body,
+        )
+        self.assertIn(
+            "tutor_assistant_worker_transcribe_dead_letter_depth 1",
+            body,
+        )
+        self.assertIn(
+            "tutor_assistant_worker_transcribe_oldest_dead_letter_age_seconds 20",
             body,
         )
         self.assertIn(
@@ -444,6 +505,14 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         )
         self.assertIn(
             f'tutor_assistant_worker_processing_depth_by_type{{task_type="{TASK_TRANSCRIBE_JOB}"}} 1',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_dead_letter_depth_by_type{{task_type="{TASK_PROCESS_AUDIO}"}} 1',
+            body,
+        )
+        self.assertIn(
+            f'tutor_assistant_worker_dead_letter_depth_by_type{{task_type="{TASK_TRANSCRIBE_JOB}"}} 1',
             body,
         )
         self.assertTrue(redis_stub.closed)

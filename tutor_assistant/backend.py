@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -134,6 +136,18 @@ WORKER_PROMETHEUS_METRICS: tuple[tuple[str, str, str, str], ...] = (
         "tutor_assistant_worker_transcribe_oldest_processing_age_seconds",
         "gauge",
         "Age in seconds of the oldest in-flight transcribe_job task.",
+    ),
+    (
+        "transcribe_dead_letter_depth",
+        "tutor_assistant_worker_transcribe_dead_letter_depth",
+        "gauge",
+        "Current dead-letter depth for transcribe_job tasks.",
+    ),
+    (
+        "transcribe_oldest_dead_letter_age_seconds",
+        "tutor_assistant_worker_transcribe_oldest_dead_letter_age_seconds",
+        "gauge",
+        "Age in seconds of the oldest dead-letter transcribe_job task.",
     ),
     (
         "queue_latency_ms_last",
@@ -469,6 +483,57 @@ def collect_queue_task_stats(
     return counts, oldest_enqueued_ms
 
 
+def parse_dead_letter_failed_at_epoch(failed_at_raw: str) -> int:
+    normalized = str(failed_at_raw or "").strip()
+    if not normalized:
+        return 0
+
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError:
+        return 0
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.timestamp())
+
+
+def collect_dead_letter_task_stats(redis_client) -> tuple[dict[str, int], dict[str, int]]:
+    counts = {task_type: 0 for task_type in WORKER_KNOWN_TASK_TYPES}
+    oldest_failed_at_ts = {task_type: 0 for task_type in WORKER_KNOWN_TASK_TYPES}
+    raw_items = redis_client.lrange(LESSON_DEAD_LETTER_QUEUE_NAME, 0, -1) or []
+
+    for raw_item in raw_items:
+        task_type = ""
+        failed_at_epoch = 0
+
+        try:
+            parsed_item = json.loads(str(raw_item))
+        except json.JSONDecodeError:
+            parsed_item = None
+
+        if isinstance(parsed_item, dict):
+            task_type = str(parsed_item.get("task_type", "")).strip()
+            failed_at_raw = parsed_item.get("failed_at")
+            if isinstance(failed_at_raw, str):
+                failed_at_epoch = parse_dead_letter_failed_at_epoch(failed_at_raw)
+
+            raw_task = str(parsed_item.get("raw_task", "")).strip()
+            if raw_task and (task_type not in WORKER_KNOWN_TASK_TYPES):
+                task_type, _lesson_id, _enqueued_at = parse_task_payload(raw_task)
+
+        if task_type not in counts:
+            continue
+
+        counts[task_type] += 1
+        if failed_at_epoch > 0:
+            current_oldest = oldest_failed_at_ts.get(task_type, 0)
+            if current_oldest <= 0 or failed_at_epoch < current_oldest:
+                oldest_failed_at_ts[task_type] = failed_at_epoch
+
+    return counts, oldest_failed_at_ts
+
+
 def collect_worker_metrics(redis_client) -> WorkerMetricsPayload:
     now_ts = int(time.time())
     ten_minutes_ago = now_ts - 600
@@ -517,6 +582,9 @@ def collect_worker_metrics(redis_client) -> WorkerMetricsPayload:
         redis_client,
         LESSON_PROCESSING_QUEUE_NAME,
     )
+    dead_letter_depth_by_type, dead_letter_oldest_failed_at_ts_by_type = collect_dead_letter_task_stats(
+        redis_client
+    )
     transcribe_oldest_queue_enqueued_ms = int(
         queue_oldest_enqueued_ms_by_type.get(TASK_TRANSCRIBE_JOB, 0)
     )
@@ -531,6 +599,14 @@ def collect_worker_metrics(redis_client) -> WorkerMetricsPayload:
     transcribe_oldest_processing_age_seconds = (
         max(0, int((now_ts * 1000 - transcribe_oldest_processing_enqueued_ms) / 1000))
         if transcribe_oldest_processing_enqueued_ms > 0
+        else -1
+    )
+    transcribe_oldest_dead_letter_failed_at_ts = int(
+        dead_letter_oldest_failed_at_ts_by_type.get(TASK_TRANSCRIBE_JOB, 0)
+    )
+    transcribe_oldest_dead_letter_age_seconds = (
+        max(0, now_ts - transcribe_oldest_dead_letter_failed_at_ts)
+        if transcribe_oldest_dead_letter_failed_at_ts > 0
         else -1
     )
 
@@ -565,10 +641,13 @@ def collect_worker_metrics(redis_client) -> WorkerMetricsPayload:
         "transcribe_processing_depth": int(processing_depth_by_type.get(TASK_TRANSCRIBE_JOB, 0)),
         "transcribe_oldest_queue_age_seconds": transcribe_oldest_queue_age_seconds,
         "transcribe_oldest_processing_age_seconds": transcribe_oldest_processing_age_seconds,
+        "transcribe_dead_letter_depth": int(dead_letter_depth_by_type.get(TASK_TRANSCRIBE_JOB, 0)),
+        "transcribe_oldest_dead_letter_age_seconds": transcribe_oldest_dead_letter_age_seconds,
         "tasks_processed_by_type": tasks_processed_by_type,
         "task_failures_by_type": task_failures_by_type,
         "queue_depth_by_type": queue_depth_by_type,
         "processing_depth_by_type": processing_depth_by_type,
+        "dead_letter_depth_by_type": dead_letter_depth_by_type,
         "queue_latency_ms_last_by_type": queue_latency_last_by_type,
         "queue_latency_ms_max_by_type": queue_latency_max_by_type,
         "queue_latency_ms_avg_by_type": queue_latency_avg_by_type,
@@ -655,6 +734,13 @@ def render_worker_metrics_prometheus(metrics: WorkerMetricsPayload) -> str:
     )
     append_prometheus_metric_by_task_type(
         lines,
+        metric_name="tutor_assistant_worker_dead_letter_depth_by_type",
+        metric_type="gauge",
+        metric_help="Current dead-letter depth by task type.",
+        values=get_metrics_by_task_type(metrics, "dead_letter_depth_by_type"),
+    )
+    append_prometheus_metric_by_task_type(
+        lines,
         metric_name="tutor_assistant_worker_queue_latency_ms_last_by_type",
         metric_type="gauge",
         metric_help="Last observed queue latency in milliseconds by task type.",
@@ -712,6 +798,10 @@ def evaluate_worker_alerts(metrics: WorkerMetricsPayload) -> list[str]:
     transcribe_oldest_processing_age_seconds_threshold = int(
         settings.worker_alert_transcribe_oldest_processing_age_seconds_threshold
     )
+    transcribe_dead_letter_threshold = int(settings.worker_alert_transcribe_dead_letter_threshold)
+    transcribe_oldest_dead_letter_age_seconds_threshold = int(
+        settings.worker_alert_transcribe_oldest_dead_letter_age_seconds_threshold
+    )
     heartbeat_age_threshold = int(settings.worker_alert_heartbeat_age_seconds_threshold)
 
     errors_last_10m = int(metrics.get("worker_errors_last_10m", 0))
@@ -721,6 +811,10 @@ def evaluate_worker_alerts(metrics: WorkerMetricsPayload) -> list[str]:
     transcribe_oldest_queue_age_seconds = int(metrics.get("transcribe_oldest_queue_age_seconds", -1))
     transcribe_oldest_processing_age_seconds = int(
         metrics.get("transcribe_oldest_processing_age_seconds", -1)
+    )
+    transcribe_dead_letter_depth = int(metrics.get("transcribe_dead_letter_depth", 0))
+    transcribe_oldest_dead_letter_age_seconds = int(
+        metrics.get("transcribe_oldest_dead_letter_age_seconds", -1)
     )
     heartbeat_age_seconds = int(metrics.get("worker_heartbeat_age_seconds", -1))
 
@@ -762,6 +856,21 @@ def evaluate_worker_alerts(metrics: WorkerMetricsPayload) -> list[str]:
             "transcribe_oldest_processing_age_seconds exceeded threshold: "
             f"{transcribe_oldest_processing_age_seconds} > "
             f"{transcribe_oldest_processing_age_seconds_threshold}"
+        )
+    if transcribe_dead_letter_depth > transcribe_dead_letter_threshold:
+        alerts.append(
+            "transcribe_dead_letter_depth exceeded threshold: "
+            f"{transcribe_dead_letter_depth} > {transcribe_dead_letter_threshold}"
+        )
+    if (
+        transcribe_oldest_dead_letter_age_seconds >= 0
+        and transcribe_oldest_dead_letter_age_seconds
+        > transcribe_oldest_dead_letter_age_seconds_threshold
+    ):
+        alerts.append(
+            "transcribe_oldest_dead_letter_age_seconds exceeded threshold: "
+            f"{transcribe_oldest_dead_letter_age_seconds} > "
+            f"{transcribe_oldest_dead_letter_age_seconds_threshold}"
         )
     if heartbeat_age_seconds < 0:
         alerts.append("worker heartbeat missing")
@@ -849,6 +958,10 @@ def worker_alerts() -> dict:
             ),
             "transcribe_oldest_processing_age_seconds": int(
                 settings.worker_alert_transcribe_oldest_processing_age_seconds_threshold
+            ),
+            "transcribe_dead_letter_depth": int(settings.worker_alert_transcribe_dead_letter_threshold),
+            "transcribe_oldest_dead_letter_age_seconds": int(
+                settings.worker_alert_transcribe_oldest_dead_letter_age_seconds_threshold
             ),
             "worker_heartbeat_age_seconds": int(
                 settings.worker_alert_heartbeat_age_seconds_threshold

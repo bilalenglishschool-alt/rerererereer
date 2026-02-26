@@ -24,6 +24,8 @@ class Settings:
     worker_alert_transcribe_queue_depth_threshold: int
     worker_alert_transcribe_oldest_queue_age_seconds_threshold: int
     worker_alert_transcribe_oldest_processing_age_seconds_threshold: int
+    worker_alert_transcribe_dead_letter_threshold: int
+    worker_alert_transcribe_oldest_dead_letter_age_seconds_threshold: int
     worker_alert_heartbeat_age_seconds_threshold: int
 
 
@@ -93,6 +95,16 @@ def get_settings() -> Settings:
         default=600,
         minimum=0,
     )
+    worker_alert_transcribe_dead_letter_threshold = _parse_positive_int(
+        os.getenv("WORKER_ALERT_TRANSCRIBE_DEAD_LETTER_THRESHOLD", "0"),
+        default=0,
+        minimum=0,
+    )
+    worker_alert_transcribe_oldest_dead_letter_age_seconds_threshold = _parse_positive_int(
+        os.getenv("WORKER_ALERT_TRANSCRIBE_OLDEST_DEAD_LETTER_AGE_SECONDS_THRESHOLD", "600"),
+        default=600,
+        minimum=0,
+    )
     worker_alert_heartbeat_age_seconds_threshold = _parse_positive_int(
         os.getenv("WORKER_ALERT_HEARTBEAT_AGE_SECONDS_THRESHOLD", "120"),
         default=120,
@@ -119,6 +131,10 @@ def get_settings() -> Settings:
         ),
         worker_alert_transcribe_oldest_processing_age_seconds_threshold=(
             worker_alert_transcribe_oldest_processing_age_seconds_threshold
+        ),
+        worker_alert_transcribe_dead_letter_threshold=worker_alert_transcribe_dead_letter_threshold,
+        worker_alert_transcribe_oldest_dead_letter_age_seconds_threshold=(
+            worker_alert_transcribe_oldest_dead_letter_age_seconds_threshold
         ),
         worker_alert_heartbeat_age_seconds_threshold=worker_alert_heartbeat_age_seconds_threshold,
     )

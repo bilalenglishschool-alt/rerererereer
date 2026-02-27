@@ -56,6 +56,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Webhook payload logging guard
+        run: |
+          set -euo pipefail
+          if rg -n --glob '!tutor_assistant/tests/**' \
+            "logger\.(debug|info|warning|error|exception)\([^\n]*\bupdate\b|logger\.(debug|info|warning|error|exception)\([^\n]*request\.json|print\([^\n]*request\.json" \
+            tutor_assistant; then
+            echo "Found forbidden webhook payload logging patterns in runtime code."
+            exit 1
+          fi
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:

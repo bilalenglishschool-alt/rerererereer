@@ -76,10 +76,12 @@ class WorkerAlertsEndpointTest(unittest.TestCase):
         transcribe_dead_letter_threshold: int,
         transcribe_oldest_dead_letter_age_seconds_threshold: int,
         heartbeat_age_threshold: int,
+        ops_api_token: str = "",
     ):
         return patch(
             "tutor_assistant.backend.settings",
             SimpleNamespace(
+                ops_api_token=ops_api_token,
                 worker_alert_errors_last_10m_threshold=errors_threshold,
                 worker_alert_dead_letter_requeued_last_10m_threshold=(
                     dead_letter_requeued_last_10m_threshold
@@ -304,6 +306,53 @@ class WorkerAlertsEndpointTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertIn("Failed to read worker metrics", response.json().get("detail", ""))
+
+    def test_alerts_require_token_when_configured(self) -> None:
+        with self._run_with_settings(
+            errors_threshold=10,
+            dead_letter_requeued_last_10m_threshold=10,
+            dead_threshold=10,
+            queue_depth_threshold=10,
+            transcribe_queue_depth_threshold=10,
+            transcribe_oldest_queue_age_seconds_threshold=10,
+            transcribe_oldest_processing_age_seconds_threshold=10,
+            transcribe_dead_letter_threshold=10,
+            transcribe_oldest_dead_letter_age_seconds_threshold=10,
+            heartbeat_age_threshold=60,
+            ops_api_token="ops-secret",
+        ):
+            with TestClient(app) as client:
+                response = client.get("/alerts/worker")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("Invalid ops token", response.json().get("detail", ""))
+
+    def test_alerts_accept_valid_token(self) -> None:
+        redis_stub = _AlertRedisStub(heartbeat_ts=1995)
+        with self._run_with_settings(
+            errors_threshold=10,
+            dead_letter_requeued_last_10m_threshold=10,
+            dead_threshold=10,
+            queue_depth_threshold=10,
+            transcribe_queue_depth_threshold=10,
+            transcribe_oldest_queue_age_seconds_threshold=10,
+            transcribe_oldest_processing_age_seconds_threshold=10,
+            transcribe_dead_letter_threshold=10,
+            transcribe_oldest_dead_letter_age_seconds_threshold=10,
+            heartbeat_age_threshold=60,
+            ops_api_token="ops-secret",
+        ):
+            with patch("tutor_assistant.backend.time.time", return_value=2000):
+                with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+                    with TestClient(app) as client:
+                        response = client.get(
+                            "/alerts/worker",
+                            headers={"X-Ops-Token": "ops-secret"},
+                        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json().get("status"), "ok")
+        self.assertTrue(redis_stub.closed)
 
 
 if __name__ == "__main__":

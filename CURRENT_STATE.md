@@ -129,7 +129,7 @@ docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
   - `POST /ops/worker/dead-letter/requeue`
   - `task_type` filter валидируется (`process_audio_lesson|generate_artifacts|transcribe_job`), иначе `400`
   - у requeue нужен filter (`task_type` или `lesson_id`), иначе `400` (обход только через `allow_bulk=true`)
-  - при заданном `OPS_API_TOKEN` endpoints `/ops/worker/*` требуют заголовок `X-Ops-Token`
+- при заданном `OPS_API_TOKEN` endpoints `/metrics/worker*`, `/alerts/worker`, `/ops/worker/*` требуют заголовок `X-Ops-Token`
   - alerts thresholds: `worker_errors_last_10m`, `dead_letter_requeued_last_10m`, `dead_letter_depth`, `queue_depth`, `transcribe_queue_depth`, `transcribe_oldest_queue_age_seconds`, `transcribe_oldest_processing_age_seconds`, `transcribe_dead_letter_depth`, `transcribe_oldest_dead_letter_age_seconds`, `worker_heartbeat_age_seconds`
   - при недоступном Redis endpoints worker metrics/alerts возвращают `503`
   - fields: `tasks_processed_total`, `task_failures_total`, `dead_letter_requeued_total`, `dead_letter_requeued_last_10m`, `worker_errors_last_10m`,
@@ -145,7 +145,7 @@ docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
   - Prometheus includes labeled counters and labeled latency/duration gauges by `task_type`
 - External monitor helper:
   - `python -m tutor_assistant.ops.check_worker_alerts`
-  - scheduled workflow `.github/workflows/worker-alert-monitor.yml` (needs `WORKER_ALERT_URL` secret)
+- scheduled workflow `.github/workflows/worker-alert-monitor.yml` (needs `WORKER_ALERT_URL`, optional `WORKER_ALERT_TOKEN` secret)
 
 ## 9) Health
 

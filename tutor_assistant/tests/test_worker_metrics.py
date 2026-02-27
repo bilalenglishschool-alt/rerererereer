@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -69,6 +70,12 @@ class _MetricsRedisStub:
 
 
 class WorkerMetricsEndpointTest(unittest.TestCase):
+    def _settings_with_ops_token(self, token: str):
+        return patch(
+            "tutor_assistant.backend.settings",
+            SimpleNamespace(ops_api_token=token),
+        )
+
     def test_metrics_endpoint_returns_latency_and_duration_fields(self) -> None:
         redis_stub = _MetricsRedisStub(
             values={
@@ -576,6 +583,35 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertIn("Failed to read worker metrics", response.json().get("detail", ""))
+
+    def test_metrics_endpoints_require_token_when_configured(self) -> None:
+        with self._settings_with_ops_token("ops-secret"):
+            with TestClient(app) as client:
+                metrics_response = client.get("/metrics/worker")
+                prometheus_response = client.get("/metrics/worker/prometheus")
+
+        self.assertEqual(metrics_response.status_code, 401)
+        self.assertEqual(prometheus_response.status_code, 401)
+        self.assertIn("Invalid ops token", metrics_response.json().get("detail", ""))
+        self.assertIn("Invalid ops token", prometheus_response.json().get("detail", ""))
+
+    def test_metrics_endpoints_accept_valid_token(self) -> None:
+        redis_stub = _MetricsRedisStub()
+        with self._settings_with_ops_token("ops-secret"):
+            with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+                with TestClient(app) as client:
+                    metrics_response = client.get(
+                        "/metrics/worker",
+                        headers={"X-Ops-Token": "ops-secret"},
+                    )
+                    prometheus_response = client.get(
+                        "/metrics/worker/prometheus",
+                        headers={"X-Ops-Token": "ops-secret"},
+                    )
+
+        self.assertEqual(metrics_response.status_code, 200)
+        self.assertEqual(prometheus_response.status_code, 200)
+        self.assertTrue(redis_stub.closed)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       WORKER_ALERT_URL: ${{ secrets.WORKER_ALERT_URL }}
+      WORKER_ALERT_TOKEN: ${{ secrets.WORKER_ALERT_TOKEN }}
       ALERT_TIMEOUT_SECONDS: "15"
     steps:
       - name: Checkout
@@ -28,4 +29,3 @@ jobs:
 
       - name: Check /alerts/worker
         run: python -m tutor_assistant.ops.check_worker_alerts
-

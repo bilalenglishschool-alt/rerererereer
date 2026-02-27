@@ -29,7 +29,7 @@
 - Отдельно считается ручной recovery из dead-letter: `dead_letter_requeued_total` (+ by-task-type).
 - Endpoint alerting: `GET /alerts/worker` по порогам `worker_errors_last_10m`, `dead_letter_requeued_last_10m`, `dead_letter_depth`, `queue_depth`, `transcribe_queue_depth`, `transcribe_oldest_queue_age_seconds`, `transcribe_oldest_processing_age_seconds`, `transcribe_dead_letter_depth`, `transcribe_oldest_dead_letter_age_seconds`, `worker_heartbeat_age_seconds`.
 - Ops endpoints для dead-letter: `GET /ops/worker/dead-letter`, `POST /ops/worker/dead-letter/requeue`.
-- Для `/ops/worker/*` используется token-guard: если задан `OPS_API_TOKEN`, нужен заголовок `X-Ops-Token`.
+- Для `/metrics/worker*`, `/alerts/worker`, `/ops/worker/*` используется token-guard: если задан `OPS_API_TOKEN`, нужен заголовок `X-Ops-Token`.
 - Whisper transcription jobs:
   - `POST /api/transcribe/jobs`
   - `GET /api/transcribe/jobs`

@@ -22,6 +22,7 @@ from tutor_assistant.queue import (
     WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY,
     WORKER_METRIC_HEARTBEAT_TS_KEY,
     WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY,
+    WORKER_METRIC_DEAD_LETTER_REQUEUED_EVENTS_ZSET_KEY,
     WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY,
@@ -74,6 +75,7 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
                 WORKER_METRIC_TASKS_PROCESSED_KEY: 44,
                 WORKER_METRIC_TASKS_FAILED_KEY: 3,
                 WORKER_FAILURE_EVENTS_ZSET_KEY: 2,
+                WORKER_METRIC_DEAD_LETTER_REQUEUED_EVENTS_ZSET_KEY: 4,
                 WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY: 50,
                 WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY: 120,
                 WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY: 210,
@@ -165,6 +167,7 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["tasks_processed_total"], 44)
         self.assertEqual(payload["task_failures_total"], 3)
         self.assertEqual(payload["dead_letter_requeued_total"], 9)
+        self.assertEqual(payload["dead_letter_requeued_last_10m"], 4)
         self.assertEqual(payload["worker_errors_last_10m"], 2)
         self.assertEqual(payload["queue_depth"], 4)
         self.assertEqual(payload["processing_depth"], 1)
@@ -299,6 +302,7 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         self.assertEqual(payload["queue_latency_ms_avg"], 0.0)
         self.assertEqual(payload["processing_duration_ms_avg"], 0.0)
         self.assertEqual(payload["dead_letter_requeued_total"], 0)
+        self.assertEqual(payload["dead_letter_requeued_last_10m"], 0)
         self.assertEqual(payload["worker_heartbeat_age_seconds"], -1)
         self.assertEqual(payload["transcribe_queue_depth"], 0)
         self.assertEqual(payload["transcribe_processing_depth"], 0)
@@ -346,6 +350,7 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
                 WORKER_METRIC_TASKS_PROCESSED_KEY: 44,
                 WORKER_METRIC_TASKS_FAILED_KEY: 3,
                 WORKER_FAILURE_EVENTS_ZSET_KEY: 2,
+                WORKER_METRIC_DEAD_LETTER_REQUEUED_EVENTS_ZSET_KEY: 4,
                 WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY: 50,
                 WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY: 120,
                 WORKER_METRIC_QUEUE_LATENCY_SUM_MS_KEY: 210,
@@ -444,6 +449,10 @@ class WorkerMetricsEndpointTest(unittest.TestCase):
         )
         self.assertIn(
             "tutor_assistant_worker_dead_letter_requeued_total 9",
+            body,
+        )
+        self.assertIn(
+            "tutor_assistant_worker_dead_letter_requeued_last_10m 4",
             body,
         )
         self.assertIn(

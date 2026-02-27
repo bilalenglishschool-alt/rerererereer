@@ -108,6 +108,12 @@ class _DeadLetterRedisStub:
         self._values[key] = next_value
         return next_value
 
+    def zadd(self, key: str, mapping: dict[str, int]):  # noqa: ANN001
+        return len(mapping)
+
+    def zremrangebyscore(self, key: str, min_score: int, max_score: int):  # noqa: ANN001, ARG002
+        return 0
+
     def close(self) -> None:
         self.closed = True
 

@@ -31,6 +31,7 @@ from .queue import (
     WORKER_METRIC_PROCESSING_DURATION_SUM_MS_KEY,
     WORKER_METRIC_HEARTBEAT_TS_KEY,
     WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY,
+    WORKER_METRIC_DEAD_LETTER_REQUEUED_EVENTS_ZSET_KEY,
     WORKER_METRIC_QUEUE_LATENCY_LAST_MS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_MAX_MS_KEY,
     WORKER_METRIC_QUEUE_LATENCY_SAMPLES_KEY,
@@ -96,6 +97,12 @@ WORKER_PROMETHEUS_METRICS: tuple[tuple[str, str, str, str], ...] = (
         "tutor_assistant_worker_dead_letter_requeued_total",
         "counter",
         "Total number of dead-letter tasks requeued back to lesson_tasks.",
+    ),
+    (
+        "dead_letter_requeued_last_10m",
+        "tutor_assistant_worker_dead_letter_requeued_last_10m",
+        "gauge",
+        "Number of dead-letter requeue operations in the last 10 minutes.",
     ),
     (
         "worker_errors_last_10m",
@@ -643,6 +650,14 @@ def requeue_dead_letter_items(
         redis_client.incr(WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY)
         if queue_task_type in WORKER_KNOWN_TASK_TYPES:
             redis_client.incr(f"{WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY}:{queue_task_type}")
+        now_ts = int(time.time())
+        event_member = f"{time.time_ns()}:{queue_task_type}:{queue_lesson_id or '-'}"
+        redis_client.zadd(WORKER_METRIC_DEAD_LETTER_REQUEUED_EVENTS_ZSET_KEY, {event_member: now_ts})
+        redis_client.zremrangebyscore(
+            WORKER_METRIC_DEAD_LETTER_REQUEUED_EVENTS_ZSET_KEY,
+            0,
+            now_ts - 86400,
+        )
         moved += 1
         moved_items.append(item)
 
@@ -730,6 +745,13 @@ def collect_worker_metrics(redis_client) -> WorkerMetricsPayload:
         "task_failures_total": int(redis_client.get(WORKER_METRIC_TASKS_FAILED_KEY) or 0),
         "dead_letter_requeued_total": int(
             redis_client.get(WORKER_METRIC_DEAD_LETTER_REQUEUED_KEY) or 0
+        ),
+        "dead_letter_requeued_last_10m": int(
+            redis_client.zcount(
+                WORKER_METRIC_DEAD_LETTER_REQUEUED_EVENTS_ZSET_KEY,
+                ten_minutes_ago,
+                now_ts,
+            )
         ),
         "worker_errors_last_10m": int(
             redis_client.zcount(WORKER_FAILURE_EVENTS_ZSET_KEY, ten_minutes_ago, now_ts)
@@ -931,9 +953,13 @@ def evaluate_worker_alerts(metrics: WorkerMetricsPayload) -> list[str]:
     transcribe_oldest_dead_letter_age_seconds_threshold = int(
         settings.worker_alert_transcribe_oldest_dead_letter_age_seconds_threshold
     )
+    dead_letter_requeued_last_10m_threshold = int(
+        settings.worker_alert_dead_letter_requeued_last_10m_threshold
+    )
     heartbeat_age_threshold = int(settings.worker_alert_heartbeat_age_seconds_threshold)
 
     errors_last_10m = int(metrics.get("worker_errors_last_10m", 0))
+    dead_letter_requeued_last_10m = int(metrics.get("dead_letter_requeued_last_10m", 0))
     dead_letter_depth = int(metrics.get("dead_letter_depth", 0))
     queue_depth = int(metrics.get("queue_depth", 0))
     transcribe_queue_depth = int(metrics.get("transcribe_queue_depth", 0))
@@ -951,6 +977,11 @@ def evaluate_worker_alerts(metrics: WorkerMetricsPayload) -> list[str]:
         alerts.append(
             "worker_errors_last_10m exceeded threshold: "
             f"{errors_last_10m} > {error_threshold}"
+        )
+    if dead_letter_requeued_last_10m > dead_letter_requeued_last_10m_threshold:
+        alerts.append(
+            "dead_letter_requeued_last_10m exceeded threshold: "
+            f"{dead_letter_requeued_last_10m} > {dead_letter_requeued_last_10m_threshold}"
         )
     if dead_letter_depth > dead_letter_threshold:
         alerts.append(
@@ -1105,6 +1136,9 @@ def worker_alerts() -> dict:
         "alerts": alerts,
         "thresholds": {
             "worker_errors_last_10m": int(settings.worker_alert_errors_last_10m_threshold),
+            "dead_letter_requeued_last_10m": int(
+                settings.worker_alert_dead_letter_requeued_last_10m_threshold
+            ),
             "dead_letter_depth": int(settings.worker_alert_dead_letter_threshold),
             "queue_depth": int(settings.worker_alert_queue_depth_threshold),
             "transcribe_queue_depth": int(settings.worker_alert_transcribe_queue_depth_threshold),

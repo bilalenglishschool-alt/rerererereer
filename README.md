@@ -28,6 +28,7 @@ Docker Compose проект с сервисами:
 - `TRANSCRIPTION_RETENTION_DAYS` (по умолчанию `14`)
 - `TRANSCRIPTION_CLEANUP_INTERVAL_SECONDS` (по умолчанию `600`)
 - `WORKER_ALERT_ERRORS_LAST_10M_THRESHOLD` (по умолчанию `0`)
+- `WORKER_ALERT_DEAD_LETTER_REQUEUED_LAST_10M_THRESHOLD` (по умолчанию `20`)
 - `WORKER_ALERT_DEAD_LETTER_THRESHOLD` (по умолчанию `0`)
 - `WORKER_ALERT_QUEUE_DEPTH_THRESHOLD` (по умолчанию `20`)
 - `WORKER_ALERT_TRANSCRIBE_QUEUE_DEPTH_THRESHOLD` (по умолчанию `10`)
@@ -200,6 +201,7 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
 - Dead-letter requeue counters:
   - `lesson_metrics:dead_letter_requeued_total`
   - `lesson_metrics:dead_letter_requeued_total:<task_type>`
+  - `lesson_metrics:dead_letter_requeued_events` (ZSET, для окна 10 минут)
 - HTTP endpoint:
   - `GET /metrics/worker`
   - `GET /metrics/worker/prometheus`
@@ -211,6 +213,7 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
   - для `/ops/worker/*`: если `OPS_API_TOKEN` задан, обязателен заголовок `X-Ops-Token`
   - `/alerts/worker` thresholds:
     - `worker_errors_last_10m`
+    - `dead_letter_requeued_last_10m`
     - `dead_letter_depth`
     - `queue_depth`
     - `transcribe_queue_depth`
@@ -220,7 +223,7 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
     - `transcribe_oldest_dead_letter_age_seconds`
     - `worker_heartbeat_age_seconds`
   - `/metrics/worker` fields:
-    - `tasks_processed_total`, `task_failures_total`, `dead_letter_requeued_total`, `worker_errors_last_10m`
+    - `tasks_processed_total`, `task_failures_total`, `dead_letter_requeued_total`, `dead_letter_requeued_last_10m`, `worker_errors_last_10m`
     - `queue_depth`, `processing_depth`, `dead_letter_depth`
     - `transcribe_queue_depth`, `transcribe_processing_depth`, `transcribe_oldest_queue_age_seconds`, `transcribe_oldest_processing_age_seconds`, `transcribe_dead_letter_depth`, `transcribe_oldest_dead_letter_age_seconds`
     - `queue_depth_by_type`, `processing_depth_by_type`, `dead_letter_depth_by_type`

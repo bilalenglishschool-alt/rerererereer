@@ -164,6 +164,7 @@
       <button id="uploadBtn" class="primary">Транскрибировать</button>
       <button id="retryBtn" class="secondary" hidden>Retry</button>
       <button id="cancelBtn" class="secondary" hidden>Cancel</button>
+      <button id="deleteBtn" class="secondary" hidden>Delete</button>
     </div>
 
     <div class="row">
@@ -189,6 +190,7 @@
     const uploadBtn = document.getElementById("uploadBtn");
     const retryBtn = document.getElementById("retryBtn");
     const cancelBtn = document.getElementById("cancelBtn");
+    const deleteBtn = document.getElementById("deleteBtn");
     const copyBtn = document.getElementById("copyBtn");
     const downloadBtn = document.getElementById("downloadBtn");
     const refreshBtn = document.getElementById("refreshBtn");
@@ -299,28 +301,33 @@
         setStatus("Готово: транскрибация завершена.", "ok");
         retryBtn.hidden = true;
         cancelBtn.hidden = true;
+        deleteBtn.hidden = false;
         uploadBtn.disabled = false;
       } else if (payload.status === "canceled") {
         setStatus("Задача отменена пользователем.", "warn");
         retryBtn.hidden = false;
         cancelBtn.hidden = true;
+        deleteBtn.hidden = false;
         uploadBtn.disabled = false;
         stopPolling();
       } else if (payload.status === "failed") {
         setStatus(`Ошибка обработки: ${payload.processing_error || "неизвестно"}`, "error");
         retryBtn.hidden = false;
         cancelBtn.hidden = true;
+        deleteBtn.hidden = false;
         uploadBtn.disabled = false;
       } else if (source === "load") {
         setStatus("Задача загружена, обновляю статус...", "warn");
         retryBtn.hidden = true;
         cancelBtn.hidden = false;
+        deleteBtn.hidden = true;
         uploadBtn.disabled = true;
         schedulePoll();
       } else if (payload.status === "queued" || payload.status === "processing") {
         setStatus("Задача в работе, обновляю статус...", "warn");
         retryBtn.hidden = true;
         cancelBtn.hidden = false;
+        deleteBtn.hidden = true;
         uploadBtn.disabled = true;
         schedulePoll();
       }
@@ -383,6 +390,7 @@
       uploadBtn.disabled = true;
       retryBtn.hidden = true;
       cancelBtn.hidden = true;
+      deleteBtn.hidden = true;
       setStatus("Загружаю файл и ставлю задачу в очередь...", "warn");
       resultEl.value = "";
 
@@ -423,6 +431,7 @@
       uploadBtn.disabled = true;
       retryBtn.hidden = true;
       cancelBtn.hidden = true;
+      deleteBtn.hidden = true;
       setStatus("Перезапускаю задачу...", "warn");
       resultEl.value = "";
 
@@ -467,6 +476,7 @@
       uploadBtn.disabled = true;
       retryBtn.hidden = true;
       cancelBtn.hidden = true;
+      deleteBtn.hidden = true;
       setStatus("Отменяю задачу...", "warn");
 
       try {
@@ -494,6 +504,55 @@
         const text = error instanceof Error ? error.message : String(error);
         setStatus(`Не удалось отменить задачу: ${text}`, "error");
         uploadBtn.disabled = false;
+      }
+    }
+
+    async function deleteJob() {
+      if (!activeJobId) {
+        setStatus("Сначала выберите задачу.", "warn");
+        return;
+      }
+      if (!window.confirm("Удалить задачу и связанные файлы транскрипта?")) {
+        return;
+      }
+
+      uploadBtn.disabled = true;
+      retryBtn.hidden = true;
+      cancelBtn.hidden = true;
+      deleteBtn.hidden = true;
+      setStatus("Удаляю задачу...", "warn");
+
+      try {
+        const response = await fetch(
+          `/api/transcribe/jobs/${encodeURIComponent(activeJobId)}`,
+          { method: "DELETE" }
+        );
+        if (!response.ok) {
+          let detail = `HTTP ${response.status}`;
+          try {
+            const payload = await response.json();
+            if (payload && payload.detail) {
+              detail = String(payload.detail);
+            }
+          } catch (_err) {
+            // no-op
+          }
+          throw new Error(detail);
+        }
+
+        activeJobId = "";
+        resultEl.value = "";
+        setMeta("Job: -");
+        stopPolling();
+        uploadBtn.disabled = false;
+        syncResultActions();
+        await refreshJobs();
+        setStatus("Задача удалена.", "ok");
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        setStatus(`Не удалось удалить задачу: ${text}`, "error");
+        uploadBtn.disabled = false;
+        deleteBtn.hidden = false;
       }
     }
 
@@ -557,6 +616,9 @@
     });
     cancelBtn.addEventListener("click", () => {
       void cancelJob();
+    });
+    deleteBtn.addEventListener("click", () => {
+      void deleteJob();
     });
     copyBtn.addEventListener("click", () => {
       void copyTranscript();

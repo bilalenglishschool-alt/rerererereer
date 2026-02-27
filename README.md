@@ -108,6 +108,7 @@ curl http://localhost:${HOST_PORT:-8000}/health
 7. При статусе `queued/processing` можно выполнить `POST /api/transcribe/jobs/{job_id}/cancel`.
 8. История задач: `GET /api/transcribe/jobs?limit=20`.
 9. Скачивание transcript: `GET /api/transcribe/jobs/{job_id}/transcript`.
+10. Ручное удаление завершенной/ошибочной/отмененной задачи: `DELETE /api/transcribe/jobs/{job_id}`.
 
 Защита загрузки:
 - допустимые расширения: `.webm, .mp3, .wav, .m4a, .ogg, .flac, .aac, .mp4`

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -335,6 +336,16 @@ def serialize_transcription_job(job: TranscriptionJob, include_text: bool = True
     if include_text:
         payload["transcript_text"] = job.transcript_text
     return payload
+
+
+def remove_transcription_job_storage(job_id: str) -> None:
+    base_dir = (settings.storage_path / "transcriptions").resolve()
+    job_dir = (base_dir / str(job_id)).resolve()
+    if not job_dir.is_relative_to(base_dir):
+        raise RuntimeError(f"Unexpected transcription storage path: {job_dir}")
+
+    if job_dir.exists():
+        shutil.rmtree(job_dir, ignore_errors=False)
 
 
 def get_request_client_id(request: Request) -> str:
@@ -1398,6 +1409,29 @@ def cancel_transcription_job(job_id: str, db: Session = Depends(get_db)) -> dict
     payload = serialize_transcription_job(job)
     payload["canceled"] = True
     return payload
+
+
+@app.delete("/api/transcribe/jobs/{job_id}")
+def delete_transcription_job(job_id: str, db: Session = Depends(get_db)) -> dict:
+    job_uuid = parse_job_id(job_id)
+    job = db.query(TranscriptionJob).filter(TranscriptionJob.id == job_uuid).first()
+    if not job:
+        raise HTTPException(status_code=404, detail="Transcription job not found")
+
+    if job.status in {"queued", "processing"}:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot delete in status={job.status}. Cancel first.",
+        )
+
+    try:
+        remove_transcription_job_storage(str(job.id))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Failed to delete transcription files: {exc}") from exc
+
+    db.delete(job)
+    db.commit()
+    return {"status": "deleted", "job_id": str(job_uuid), "deleted": True}
 
 
 @app.get("/api/transcribe/jobs/{job_id}/transcript")

@@ -225,7 +225,7 @@ class WorkerDeadLetterOpsTest(unittest.TestCase):
         with patch("tutor_assistant.backend.get_redis_client", side_effect=RedisError("down")):
             with TestClient(app) as client:
                 list_response = client.get("/ops/worker/dead-letter")
-                requeue_response = client.post("/ops/worker/dead-letter/requeue")
+                requeue_response = client.post("/ops/worker/dead-letter/requeue?allow_bulk=true")
 
         self.assertEqual(list_response.status_code, 503)
         self.assertIn("Failed to read dead-letter queue", list_response.json().get("detail", ""))
@@ -259,7 +259,7 @@ class WorkerDeadLetterOpsTest(unittest.TestCase):
                         headers={"X-Ops-Token": "ops-secret"},
                     )
                     requeue_response = client.post(
-                        "/ops/worker/dead-letter/requeue",
+                        "/ops/worker/dead-letter/requeue?allow_bulk=true",
                         headers={"X-Ops-Token": "ops-secret"},
                     )
 
@@ -280,6 +280,15 @@ class WorkerDeadLetterOpsTest(unittest.TestCase):
         self.assertEqual(requeue_response.status_code, 400)
         self.assertIn("Invalid task_type", list_response.json().get("detail", ""))
         self.assertIn("Invalid task_type", requeue_response.json().get("detail", ""))
+        mocked_get_redis.assert_not_called()
+
+    def test_requeue_requires_filter_unless_allow_bulk(self) -> None:
+        with patch("tutor_assistant.backend.get_redis_client") as mocked_get_redis:
+            with TestClient(app) as client:
+                response = client.post("/ops/worker/dead-letter/requeue")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Provide task_type or lesson_id filter", response.json().get("detail", ""))
         mocked_get_redis.assert_not_called()
 
 

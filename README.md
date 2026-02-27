@@ -210,6 +210,7 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
   - `POST /ops/worker/dead-letter/requeue` (ручной requeue из dead-letter обратно в `lesson_tasks`)
   - при requeue `enqueued_at` в queue payload обновляется на текущее время
   - filter `task_type` принимает только: `process_audio_lesson`, `generate_artifacts`, `transcribe_job` (иначе `400`)
+  - для безопасного requeue: нужен `task_type` или `lesson_id`; массовый requeue возможен только с `allow_bulk=true`
   - для `/ops/worker/*`: если `OPS_API_TOKEN` задан, обязателен заголовок `X-Ops-Token`
   - `/alerts/worker` thresholds:
     - `worker_errors_last_10m`

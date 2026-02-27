@@ -115,7 +115,7 @@ docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
 
 ## 8) Reliability status
 - Invite-flow тесты покрыты: invalid / expired / used / idempotent claim.
-- Webhook privacy-regression тест есть (лог только metadata).
+- Webhook privacy-regression покрыт тестом и CI grep-guard (лог только metadata, без payload).
 - Worker policy:
   - transient failure -> requeue
   - max attempts reached -> dead-letter (`lesson_tasks:dead`)

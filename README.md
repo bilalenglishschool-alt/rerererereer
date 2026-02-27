@@ -159,6 +159,7 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
 - Workflow: `.github/workflows/ci.yml`
 - Запускается на `push` (`main`, `codex/**`) и на `pull_request`.
 - Шаги:
+  - grep-guard: блокирует прямое логирование webhook payload (`update`/`request.json`) в runtime-коде
   - поднимает `postgres` и `redis` services
   - выполняет `alembic upgrade head`
   - выполняет `alembic check`
@@ -168,7 +169,7 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
 - lesson lifecycle (text flow)
 - invite-flow (invalid/expired/used/idempotent)
 - whisper transcription flow (create/status/retry + worker success path)
-- webhook logging privacy regression
+- webhook logging privacy regression (unit tests + CI grep-guard)
 - worker retry policy (requeue/dead-letter)
 
 ## Reliability & Observability

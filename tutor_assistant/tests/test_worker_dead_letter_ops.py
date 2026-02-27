@@ -262,6 +262,20 @@ class WorkerDeadLetterOpsTest(unittest.TestCase):
         self.assertEqual(list_response.json().get("count"), 0)
         self.assertEqual(requeue_response.json().get("moved"), 0)
 
+    def test_ops_endpoints_reject_unknown_task_type(self) -> None:
+        with patch("tutor_assistant.backend.get_redis_client") as mocked_get_redis:
+            with TestClient(app) as client:
+                list_response = client.get("/ops/worker/dead-letter?task_type=unknown_type")
+                requeue_response = client.post(
+                    "/ops/worker/dead-letter/requeue?task_type=unknown_type"
+                )
+
+        self.assertEqual(list_response.status_code, 400)
+        self.assertEqual(requeue_response.status_code, 400)
+        self.assertIn("Invalid task_type", list_response.json().get("detail", ""))
+        self.assertIn("Invalid task_type", requeue_response.json().get("detail", ""))
+        mocked_get_redis.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

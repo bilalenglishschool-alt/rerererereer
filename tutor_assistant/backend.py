@@ -1037,6 +1037,21 @@ def require_ops_token(
         raise HTTPException(status_code=401, detail="Invalid ops token")
 
 
+def validate_task_type_filter(task_type: str | None) -> str | None:
+    normalized = str(task_type or "").strip()
+    if not normalized:
+        return None
+
+    if normalized not in WORKER_KNOWN_TASK_TYPES:
+        allowed_values = ", ".join(WORKER_KNOWN_TASK_TYPES)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid task_type. Allowed values: {allowed_values}",
+        )
+
+    return normalized
+
+
 @app.get("/health")
 def health(db: Session = Depends(get_db)) -> dict:
     postgres_ok = False
@@ -1118,13 +1133,15 @@ def worker_dead_letter_list(
     lesson_id: str | None = Query(None),
     _ops_guard: None = Depends(require_ops_token),
 ) -> dict:
+    validated_task_type = validate_task_type_filter(task_type)
+
     redis_client = None
     try:
         redis_client = get_redis_client(settings)
         items = list_dead_letter_items(
             redis_client,
             limit=limit,
-            task_type=task_type,
+            task_type=validated_task_type,
             lesson_id=lesson_id,
         )
     except RedisError as exc:
@@ -1156,13 +1173,15 @@ def worker_dead_letter_requeue(
     lesson_id: str | None = Query(None),
     _ops_guard: None = Depends(require_ops_token),
 ) -> dict:
+    validated_task_type = validate_task_type_filter(task_type)
+
     redis_client = None
     try:
         redis_client = get_redis_client(settings)
         moved, moved_items = requeue_dead_letter_items(
             redis_client,
             limit=limit,
-            task_type=task_type,
+            task_type=validated_task_type,
             lesson_id=lesson_id,
         )
     except RedisError as exc:

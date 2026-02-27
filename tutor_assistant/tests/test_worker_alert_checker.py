@@ -56,6 +56,25 @@ class TestWorkerAlertChecker(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("Invalid JSON", message)
 
+    def test_check_worker_alerts_sends_ops_token_header(self) -> None:
+        with patch(
+            "tutor_assistant.ops.check_worker_alerts.requests.get",
+            return_value=_ResponseStub(status_code=200, payload={"status": "ok"}),
+        ) as requests_get:
+            code, message = check_worker_alerts(
+                "https://example.com/alerts/worker",
+                timeout_seconds=7,
+                token="ops-secret",
+            )
+
+        self.assertEqual(code, 0)
+        self.assertIn("status=ok", message)
+        requests_get.assert_called_once_with(
+            "https://example.com/alerts/worker",
+            timeout=7,
+            headers={"X-Ops-Token": "ops-secret"},
+        )
+
     def test_main_fails_when_url_missing(self) -> None:
         with patch("tutor_assistant.ops.check_worker_alerts.print"):
             with patch.dict("os.environ", {}, clear=True):

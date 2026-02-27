@@ -1060,7 +1060,7 @@ def load_worker_metrics_or_503() -> WorkerMetricsPayload:
 def require_ops_token(
     x_ops_token: str | None = Header(default=None, alias="X-Ops-Token"),
 ) -> None:
-    expected_token = str(settings.ops_api_token or "").strip()
+    expected_token = str(getattr(settings, "ops_api_token", "") or "").strip()
     if not expected_token:
         return
 
@@ -1113,12 +1113,12 @@ def health(db: Session = Depends(get_db)) -> dict:
 
 
 @app.get("/metrics/worker")
-def worker_metrics() -> dict:
+def worker_metrics(_ops_guard: None = Depends(require_ops_token)) -> dict:
     return load_worker_metrics_or_503()
 
 
 @app.get("/metrics/worker/prometheus", response_class=PlainTextResponse)
-def worker_metrics_prometheus() -> PlainTextResponse:
+def worker_metrics_prometheus(_ops_guard: None = Depends(require_ops_token)) -> PlainTextResponse:
     metrics = load_worker_metrics_or_503()
     payload = render_worker_metrics_prometheus(metrics)
     return PlainTextResponse(
@@ -1128,7 +1128,7 @@ def worker_metrics_prometheus() -> PlainTextResponse:
 
 
 @app.get("/alerts/worker")
-def worker_alerts() -> dict:
+def worker_alerts(_ops_guard: None = Depends(require_ops_token)) -> dict:
     metrics = load_worker_metrics_or_503()
     alerts = evaluate_worker_alerts(metrics)
     return {

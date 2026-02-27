@@ -18,7 +18,7 @@ Docker Compose проект с сервисами:
 ## Переменные окружения (.env)
 - `BOT_TOKEN`
 - `BASE_URL`
-- `OPS_API_TOKEN` (если задан, обязателен заголовок `X-Ops-Token` для `/ops/worker/*`)
+- `OPS_API_TOKEN` (если задан, обязателен заголовок `X-Ops-Token` для `/metrics/worker*`, `/alerts/worker`, `/ops/worker/*`)
 - `STORAGE_PATH`
 - `LLM_PROVIDER`
 - `LLM_API_KEY`
@@ -212,7 +212,7 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
   - при requeue `enqueued_at` в queue payload обновляется на текущее время
   - filter `task_type` принимает только: `process_audio_lesson`, `generate_artifacts`, `transcribe_job` (иначе `400`)
   - для безопасного requeue: нужен `task_type` или `lesson_id`; массовый requeue возможен только с `allow_bulk=true`
-  - для `/ops/worker/*`: если `OPS_API_TOKEN` задан, обязателен заголовок `X-Ops-Token`
+  - для `/metrics/worker*`, `/alerts/worker`, `/ops/worker/*`: если `OPS_API_TOKEN` задан, обязателен заголовок `X-Ops-Token`
   - `/alerts/worker` thresholds:
     - `worker_errors_last_10m`
     - `dead_letter_requeued_last_10m`
@@ -244,8 +244,10 @@ docker compose exec backend python -m unittest discover -s tutor_assistant/tests
   - `python -m tutor_assistant.ops.check_worker_alerts`
   - env:
     - `WORKER_ALERT_URL` (example: `https://<your-domain>/alerts/worker`)
+    - `WORKER_ALERT_TOKEN` (optional, forwarded as `X-Ops-Token`)
     - `ALERT_TIMEOUT_SECONDS` (default `10`)
   - exit code: `0=ok`, `2=alert`, `1=endpoint/infra error`
 - Scheduled monitor workflow:
   - `.github/workflows/worker-alert-monitor.yml` (every 30 minutes)
   - requires repository secret: `WORKER_ALERT_URL`
+  - optional repository secret: `WORKER_ALERT_TOKEN`

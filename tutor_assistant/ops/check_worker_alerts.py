@@ -25,9 +25,18 @@ def evaluate_alert_payload(payload: dict[str, Any]) -> tuple[int, str]:
     return 1, f"Unexpected worker alert payload status: {status or '<empty>'}"
 
 
-def check_worker_alerts(alert_url: str, timeout_seconds: int = 10) -> tuple[int, str]:
+def check_worker_alerts(
+    alert_url: str,
+    timeout_seconds: int = 10,
+    token: str = "",
+) -> tuple[int, str]:
+    headers = {"X-Ops-Token": token} if token else None
     try:
-        response = requests.get(alert_url, timeout=max(1, int(timeout_seconds)))
+        response = requests.get(
+            alert_url,
+            timeout=max(1, int(timeout_seconds)),
+            headers=headers,
+        )
     except requests.RequestException as exc:
         return 1, f"Failed to call {alert_url}: {exc}"
 
@@ -58,7 +67,12 @@ def main() -> int:
         print(f"Invalid ALERT_TIMEOUT_SECONDS value: {timeout_seconds_raw}")
         return 1
 
-    code, message = check_worker_alerts(alert_url=alert_url, timeout_seconds=timeout_seconds)
+    token = os.getenv("WORKER_ALERT_TOKEN", "").strip()
+    code, message = check_worker_alerts(
+        alert_url=alert_url,
+        timeout_seconds=timeout_seconds,
+        token=token,
+    )
     print(message)
     return code
 

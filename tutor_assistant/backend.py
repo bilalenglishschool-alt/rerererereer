@@ -1205,9 +1205,17 @@ def worker_dead_letter_requeue(
     limit: int = Query(20, ge=1, le=200),
     task_type: str | None = Query(None),
     lesson_id: str | None = Query(None),
+    allow_bulk: bool = Query(False),
     _ops_guard: None = Depends(require_ops_token),
 ) -> dict:
     validated_task_type = validate_task_type_filter(task_type)
+    normalized_lesson_id = str(lesson_id or "").strip()
+
+    if not allow_bulk and not validated_task_type and not normalized_lesson_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide task_type or lesson_id filter, or set allow_bulk=true",
+        )
 
     redis_client = None
     try:
@@ -1216,7 +1224,7 @@ def worker_dead_letter_requeue(
             redis_client,
             limit=limit,
             task_type=validated_task_type,
-            lesson_id=lesson_id,
+            lesson_id=normalized_lesson_id or None,
         )
     except RedisError as exc:
         raise HTTPException(status_code=503, detail=f"Failed to requeue dead-letter tasks: {exc}") from exc

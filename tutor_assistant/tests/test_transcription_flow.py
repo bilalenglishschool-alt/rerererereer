@@ -405,6 +405,69 @@ class TranscriptionFlowTest(unittest.TestCase):
                     download_response.headers.get("content-disposition", ""),
                 )
 
+    def test_delete_done_job_removes_job_and_storage(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                create_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"audio-bytes", "audio/webm")},
+                )
+                self.assertEqual(create_response.status_code, 202)
+                job_id = create_response.json()["job_id"]
+                self._job_ids.append(job_id)
+
+                with SessionLocal() as db:
+                    job = db.query(TranscriptionJob).filter(TranscriptionJob.id == UUID(job_id)).first()
+                    self.assertIsNotNone(job)
+                    job.status = "done"
+                    job.transcript_text = "Transcript content from test"
+                    db.commit()
+                    source_dir = Path(job.source_path).resolve().parent
+
+                self.assertTrue(source_dir.exists())
+
+                delete_response = client.delete(f"/api/transcribe/jobs/{job_id}")
+                self.assertEqual(delete_response.status_code, 200)
+                delete_payload = delete_response.json()
+                self.assertEqual(delete_payload["status"], "deleted")
+                self.assertEqual(delete_payload["job_id"], job_id)
+                self.assertTrue(delete_payload["deleted"])
+
+                get_response = client.get(f"/api/transcribe/jobs/{job_id}")
+                self.assertEqual(get_response.status_code, 404)
+
+        with SessionLocal() as db:
+            job = db.query(TranscriptionJob).filter(TranscriptionJob.id == UUID(job_id)).first()
+            self.assertIsNone(job)
+        self.assertFalse(source_dir.exists())
+
+        if job_id in self._job_ids:
+            self._job_ids.remove(job_id)
+
+    def test_delete_queued_job_returns_409(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                create_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"audio-bytes", "audio/webm")},
+                )
+                self.assertEqual(create_response.status_code, 202)
+                job_id = create_response.json()["job_id"]
+                self._job_ids.append(job_id)
+
+                delete_response = client.delete(f"/api/transcribe/jobs/{job_id}")
+                self.assertEqual(delete_response.status_code, 409)
+                self.assertIn(
+                    "Cannot delete in status=queued",
+                    delete_response.json().get("detail", ""),
+                )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -35,6 +35,7 @@
   - `GET /api/transcribe/jobs`
   - `GET /api/transcribe/jobs/{job_id}`
   - `POST /api/transcribe/jobs/{job_id}/cancel`
+  - `DELETE /api/transcribe/jobs/{job_id}`
   - `GET /api/transcribe/jobs/{job_id}/transcript`
   - `POST /api/transcribe/jobs/{job_id}/retry`
   - web UI `/transcribe`.

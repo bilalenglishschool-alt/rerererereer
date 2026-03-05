@@ -1352,7 +1352,12 @@ def retry_transcription_job(job_id: str, db: Session = Depends(get_db)) -> dict:
         payload["queued"] = False
         return payload
 
-    if job.status not in {"failed", "queued", "canceled"}:
+    if job.status == "queued":
+        payload = serialize_transcription_job(job)
+        payload["queued"] = False
+        return payload
+
+    if job.status not in {"failed", "canceled"}:
         raise HTTPException(
             status_code=409,
             detail=f"Cannot retry in status={job.status}",

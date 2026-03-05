@@ -109,6 +109,8 @@ curl http://localhost:${HOST_PORT:-8000}/health
 8. История задач: `GET /api/transcribe/jobs?limit=20`.
 9. Скачивание transcript: `GET /api/transcribe/jobs/{job_id}/transcript`.
 10. Ручное удаление завершенной/ошибочной/отмененной задачи: `DELETE /api/transcribe/jobs/{job_id}`.
+11. `retry` для `queued` и `done` idempotent: новый task в очередь не добавляется.
+12. Если `cancel` пришёл во время `processing`, финализация в `done` не перезаписывает `canceled`.
 
 Защита загрузки:
 - допустимые расширения: `.webm, .mp3, .wav, .m4a, .ogg, .flac, .aac, .mp4`

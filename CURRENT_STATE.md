@@ -112,6 +112,8 @@ docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
 - Queue task: `task_type=transcribe_job`
 - Worker поддерживает retry/dead-letter policy для transcription-job.
 - На upload endpoint включен rate limit: `6` загрузок в минуту на IP.
+- `retry` для `queued|done` idempotent: повторно task в очередь не добавляется.
+- Если `cancel` пришел во время `processing`, финализация не перезаписывает `canceled` в `done`.
 - Удаление transcription job разрешено только для `done|failed|canceled` (для `queued|processing` -> `409`).
 - Worker выполняет periodic retention cleanup старых `done/failed/canceled` transcription jobs.
 

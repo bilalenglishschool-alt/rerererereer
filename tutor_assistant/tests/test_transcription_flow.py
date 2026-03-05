@@ -176,6 +176,28 @@ class TranscriptionFlowTest(unittest.TestCase):
                 self.assertEqual(task["task_type"], TASK_TRANSCRIBE_JOB)
                 self.assertEqual(task["lesson_id"], job_id)
 
+    def test_retry_queued_job_is_idempotent(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"queued-audio", "audio/webm")},
+                )
+                self.assertEqual(response.status_code, 202)
+                job_id = response.json()["job_id"]
+                self._job_ids.append(job_id)
+
+                self.assertEqual(len(redis_stub.pushed), 1)
+                retry_response = client.post(f"/api/transcribe/jobs/{job_id}/retry")
+                self.assertEqual(retry_response.status_code, 200)
+                retry_payload = retry_response.json()
+                self.assertEqual(retry_payload["status"], "queued")
+                self.assertFalse(retry_payload["queued"])
+                self.assertEqual(len(redis_stub.pushed), 1)
+
     def test_cancel_queued_job_marks_status_canceled(self) -> None:
         from unittest.mock import patch
 
@@ -259,6 +281,42 @@ class TranscriptionFlowTest(unittest.TestCase):
             job = db.query(TranscriptionJob).filter(TranscriptionJob.id == UUID(job_id)).first()
             self.assertIsNotNone(job)
             self.assertEqual(job.status, "canceled")
+
+    def test_worker_keeps_canceled_if_canceled_during_processing(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                create_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"audio-bytes", "audio/webm")},
+                )
+                self.assertEqual(create_response.status_code, 202)
+                job_id = create_response.json()["job_id"]
+                self._job_ids.append(job_id)
+
+        def _cancel_job_inside_transcribe(*args, **kwargs):  # noqa: ANN002, ANN003
+            with SessionLocal() as db:
+                job = db.query(TranscriptionJob).filter(TranscriptionJob.id == UUID(job_id)).first()
+                self.assertIsNotNone(job)
+                job.status = "canceled"
+                job.processing_error = "Canceled by user"
+                db.commit()
+            return "transcript that must not be finalized"
+
+        with patch(
+            "tutor_assistant.worker.transcribe_audio",
+            side_effect=_cancel_job_inside_transcribe,
+        ):
+            process_transcription_job(job_id)
+
+        with SessionLocal() as db:
+            job = db.query(TranscriptionJob).filter(TranscriptionJob.id == UUID(job_id)).first()
+            self.assertIsNotNone(job)
+            self.assertEqual(job.status, "canceled")
+            self.assertIsNone(job.transcript_text)
+            self.assertIsNone(job.transcript_path)
 
     def test_rejects_unsupported_extension(self) -> None:
         from unittest.mock import patch

@@ -461,12 +461,40 @@ def process_transcription_job(job_id: str) -> None:
         if not source_path.exists() or not source_path.is_file():
             raise FileNotFoundError(f"Audio file not found: {source_path}")
 
-        transcript = transcribe_audio(
-            audio_path=source_path,
-            model_name=settings.whisper_model,
-            cache_dir=settings.storage_path / "whisper-cache",
-            logger=logger,
+    transcript = transcribe_audio(
+        audio_path=source_path,
+        model_name=settings.whisper_model,
+        cache_dir=settings.storage_path / "whisper-cache",
+        logger=logger,
+    )
+
+    with SessionLocal() as db:
+        job = (
+            db.query(TranscriptionJob)
+            .filter(TranscriptionJob.id == job_uuid)
+            .with_for_update()
+            .first()
         )
+        if not job:
+            logger.warning("Transcription job %s disappeared before finalize", job_id)
+            return
+
+        if job.status == "canceled":
+            logger.info("Transcription job %s canceled before finalize, keeping canceled state", job_id)
+            return
+
+        if job.status == "done":
+            logger.info("Transcription job %s already done before finalize, skipping", job_id)
+            return
+
+        if job.status != "processing":
+            logger.info(
+                "Transcription job %s moved to status=%s before finalize, skipping",
+                job_id,
+                job.status,
+            )
+            return
+
         transcript_path = write_transcription_text(
             settings=settings,
             job_id=str(job.id),

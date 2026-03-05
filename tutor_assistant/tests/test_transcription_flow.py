@@ -415,6 +415,85 @@ class TranscriptionFlowTest(unittest.TestCase):
                 self.assertLess(by_id[second_job_id], by_id[first_job_id])
                 self.assertNotIn("transcript_text", items[0])
 
+    def test_list_jobs_supports_status_filter(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                failed_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"failed-audio", "audio/webm")},
+                )
+                self.assertEqual(failed_response.status_code, 202)
+                failed_job_id = failed_response.json()["job_id"]
+                self._job_ids.append(failed_job_id)
+
+                done_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"done-audio", "audio/webm")},
+                )
+                self.assertEqual(done_response.status_code, 202)
+                done_job_id = done_response.json()["job_id"]
+                self._job_ids.append(done_job_id)
+
+                queued_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"queued-audio", "audio/webm")},
+                )
+                self.assertEqual(queued_response.status_code, 202)
+                queued_job_id = queued_response.json()["job_id"]
+                self._job_ids.append(queued_job_id)
+
+                with SessionLocal() as db:
+                    failed_job = (
+                        db.query(TranscriptionJob)
+                        .filter(TranscriptionJob.id == UUID(failed_job_id))
+                        .first()
+                    )
+                    done_job = (
+                        db.query(TranscriptionJob)
+                        .filter(TranscriptionJob.id == UUID(done_job_id))
+                        .first()
+                    )
+                    self.assertIsNotNone(failed_job)
+                    self.assertIsNotNone(done_job)
+                    failed_job.status = "failed"
+                    failed_job.processing_error = "forced failure"
+                    done_job.status = "done"
+                    done_job.transcript_text = "ready text"
+                    done_job.transcript_path = "/tmp/done-transcript.txt"
+                    db.commit()
+
+                failed_list_response = client.get("/api/transcribe/jobs?status=failed")
+                self.assertEqual(failed_list_response.status_code, 200)
+                failed_items = failed_list_response.json()["items"]
+                self.assertEqual(len(failed_items), 1)
+                self.assertEqual(failed_items[0]["job_id"], failed_job_id)
+                self.assertEqual(failed_items[0]["status"], "failed")
+
+                done_list_response = client.get("/api/transcribe/jobs?status=done")
+                self.assertEqual(done_list_response.status_code, 200)
+                done_items = done_list_response.json()["items"]
+                self.assertEqual(len(done_items), 1)
+                self.assertEqual(done_items[0]["job_id"], done_job_id)
+                self.assertEqual(done_items[0]["status"], "done")
+                self.assertNotIn("transcript_text", done_items[0])
+
+                queued_list_response = client.get("/api/transcribe/jobs?status=queued")
+                self.assertEqual(queued_list_response.status_code, 200)
+                queued_items = queued_list_response.json()["items"]
+                self.assertEqual(len(queued_items), 1)
+                self.assertEqual(queued_items[0]["job_id"], queued_job_id)
+                self.assertEqual(queued_items[0]["status"], "queued")
+
+    def test_list_jobs_returns_400_for_invalid_status_filter(self) -> None:
+        with TestClient(app) as client:
+            response = client.get("/api/transcribe/jobs?status=bad_status")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Invalid status", response.json().get("detail", ""))
+
     def test_download_transcript_returns_409_when_not_ready(self) -> None:
         from unittest.mock import patch
 

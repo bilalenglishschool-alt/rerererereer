@@ -105,6 +105,7 @@ docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
 - API endpoints:
   - `GET /transcribe`
   - `POST /api/transcribe/jobs`
+  - `GET /api/transcribe/jobs` (history, с optional filter `status=queued|processing|done|failed|canceled`)
   - `GET /api/transcribe/jobs/{job_id}`
   - `POST /api/transcribe/jobs/{job_id}/cancel`
   - `DELETE /api/transcribe/jobs/{job_id}`

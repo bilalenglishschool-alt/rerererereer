@@ -106,7 +106,7 @@ curl http://localhost:${HOST_PORT:-8000}/health
 5. Статус/результат доступен через `GET /api/transcribe/jobs/{job_id}`.
 6. При статусе `failed` можно выполнить `POST /api/transcribe/jobs/{job_id}/retry`.
 7. При статусе `queued/processing` можно выполнить `POST /api/transcribe/jobs/{job_id}/cancel`.
-8. История задач: `GET /api/transcribe/jobs?limit=20`.
+8. История задач: `GET /api/transcribe/jobs?limit=20` (опционально: `&status=queued|processing|done|failed|canceled`).
 9. Скачивание transcript: `GET /api/transcribe/jobs/{job_id}/transcript`.
 10. Ручное удаление завершенной/ошибочной/отмененной задачи: `DELETE /api/transcribe/jobs/{job_id}`.
 11. `retry` для `queued` и `done` idempotent: новый task в очередь не добавляется.

@@ -67,6 +67,15 @@
       background: #fff;
     }
 
+    select {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+    }
+
     button {
       border: 0;
       border-radius: 10px;
@@ -170,6 +179,15 @@
     <div class="row">
       <button id="copyBtn" class="secondary" disabled>Copy text</button>
       <button id="downloadBtn" class="secondary" disabled>Download .txt</button>
+      <label for="statusFilter">Фильтр:</label>
+      <select id="statusFilter">
+        <option value="">Все статусы</option>
+        <option value="queued">queued</option>
+        <option value="processing">processing</option>
+        <option value="done">done</option>
+        <option value="failed">failed</option>
+        <option value="canceled">canceled</option>
+      </select>
       <button id="refreshBtn" class="secondary">Обновить список</button>
     </div>
 
@@ -193,6 +211,7 @@
     const deleteBtn = document.getElementById("deleteBtn");
     const copyBtn = document.getElementById("copyBtn");
     const downloadBtn = document.getElementById("downloadBtn");
+    const statusFilterEl = document.getElementById("statusFilter");
     const refreshBtn = document.getElementById("refreshBtn");
     const statusEl = document.getElementById("status");
     const metaEl = document.getElementById("meta");
@@ -243,8 +262,14 @@
       return response.json();
     }
 
-    async function fetchJobs(limit = 20) {
-      const response = await fetch(`/api/transcribe/jobs?limit=${encodeURIComponent(limit)}`);
+    async function fetchJobs(limit = 20, statusFilter = "") {
+      const params = new URLSearchParams();
+      params.set("limit", String(limit));
+      const normalizedStatus = String(statusFilter || "").trim().toLowerCase();
+      if (normalizedStatus) {
+        params.set("status", normalizedStatus);
+      }
+      const response = await fetch(`/api/transcribe/jobs?${params.toString()}`);
       if (!response.ok) {
         throw new Error(`jobs list failed: HTTP ${response.status}`);
       }
@@ -255,7 +280,12 @@
       jobsListEl.innerHTML = "";
       if (!Array.isArray(items) || items.length === 0) {
         const li = document.createElement("li");
-        li.innerHTML = '<p class="meta">Список пуст.</p>';
+        const activeFilter = String(statusFilterEl?.value || "").trim();
+        if (activeFilter) {
+          li.innerHTML = `<p class="meta">Для фильтра status=${activeFilter} задач нет.</p>`;
+        } else {
+          li.innerHTML = '<p class="meta">Список пуст.</p>';
+        }
         jobsListEl.appendChild(li);
         return;
       }
@@ -281,7 +311,7 @@
 
     async function refreshJobs() {
       try {
-        const payload = await fetchJobs();
+        const payload = await fetchJobs(20, statusFilterEl ? statusFilterEl.value : "");
         renderJobs(payload.items || []);
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
@@ -627,6 +657,9 @@
       void downloadTranscript();
     });
     refreshBtn.addEventListener("click", () => {
+      void refreshJobs();
+    });
+    statusFilterEl.addEventListener("change", () => {
       void refreshJobs();
     });
 

@@ -79,6 +79,13 @@ TRANSCRIPTION_ALLOWED_CONTENT_TYPES = {
     "audio/x-wav",
     "video/webm",
 }
+TRANSCRIPTION_KNOWN_STATUSES = (
+    "queued",
+    "processing",
+    "done",
+    "failed",
+    "canceled",
+)
 
 WORKER_PROMETHEUS_METRICS: tuple[tuple[str, str, str, str], ...] = (
     (
@@ -1094,6 +1101,21 @@ def validate_task_type_filter(task_type: str | None) -> str | None:
     return normalized
 
 
+def validate_transcription_status_filter(status: str | None) -> str | None:
+    normalized = str(status or "").strip().lower()
+    if not normalized:
+        return None
+
+    if normalized not in TRANSCRIPTION_KNOWN_STATUSES:
+        allowed_values = ", ".join(TRANSCRIPTION_KNOWN_STATUSES)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Allowed values: {allowed_values}",
+        )
+
+    return normalized
+
+
 @app.get("/health")
 def health(db: Session = Depends(get_db)) -> dict:
     postgres_ok = False
@@ -1317,14 +1339,15 @@ async def create_transcription_job(
 @app.get("/api/transcribe/jobs")
 def list_transcription_jobs(
     limit: int = Query(20, ge=1, le=100),
+    status: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> dict:
-    jobs = (
-        db.query(TranscriptionJob)
-        .order_by(TranscriptionJob.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+    validated_status = validate_transcription_status_filter(status)
+    query = db.query(TranscriptionJob)
+    if validated_status:
+        query = query.filter(TranscriptionJob.status == validated_status)
+
+    jobs = query.order_by(TranscriptionJob.created_at.desc()).limit(limit).all()
     return {
         "items": [serialize_transcription_job(job, include_text=False) for job in jobs],
         "count": len(jobs),

@@ -79,6 +79,14 @@ TRANSCRIPTION_ALLOWED_CONTENT_TYPES = {
     "audio/x-wav",
     "video/webm",
 }
+TRANSCRIPTION_KNOWN_STATUSES = (
+    "queued",
+    "processing",
+    "done",
+    "failed",
+    "canceled",
+)
+TRANSCRIPTION_KNOWN_STATUS_FILTERS = TRANSCRIPTION_KNOWN_STATUSES + ("active",)
 
 WORKER_PROMETHEUS_METRICS: tuple[tuple[str, str, str, str], ...] = (
     (
@@ -1094,6 +1102,21 @@ def validate_task_type_filter(task_type: str | None) -> str | None:
     return normalized
 
 
+def validate_transcription_status_filter(status: str | None) -> str | None:
+    normalized = str(status or "").strip().lower()
+    if not normalized:
+        return None
+
+    if normalized not in TRANSCRIPTION_KNOWN_STATUS_FILTERS:
+        allowed_values = ", ".join(TRANSCRIPTION_KNOWN_STATUS_FILTERS)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Allowed values: {allowed_values}",
+        )
+
+    return normalized
+
+
 @app.get("/health")
 def health(db: Session = Depends(get_db)) -> dict:
     postgres_ok = False
@@ -1317,17 +1340,30 @@ async def create_transcription_job(
 @app.get("/api/transcribe/jobs")
 def list_transcription_jobs(
     limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status: str | None = Query(None),
+    job_id: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> dict:
-    jobs = (
-        db.query(TranscriptionJob)
-        .order_by(TranscriptionJob.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+    validated_status = validate_transcription_status_filter(status)
+    normalized_job_id = str(job_id or "").strip()
+    validated_job_uuid = parse_job_id(normalized_job_id) if normalized_job_id else None
+    query = db.query(TranscriptionJob)
+    if validated_job_uuid:
+        query = query.filter(TranscriptionJob.id == validated_job_uuid)
+    if validated_status == "active":
+        query = query.filter(TranscriptionJob.status.in_(("queued", "processing")))
+    elif validated_status:
+        query = query.filter(TranscriptionJob.status == validated_status)
+
+    total_count = int(query.count())
+    jobs = query.order_by(TranscriptionJob.created_at.desc()).offset(offset).limit(limit).all()
     return {
         "items": [serialize_transcription_job(job, include_text=False) for job in jobs],
         "count": len(jobs),
+        "total_count": total_count,
+        "limit": int(limit),
+        "offset": int(offset),
     }
 
 

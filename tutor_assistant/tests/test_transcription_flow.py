@@ -415,6 +415,198 @@ class TranscriptionFlowTest(unittest.TestCase):
                 self.assertLess(by_id[second_job_id], by_id[first_job_id])
                 self.assertNotIn("transcript_text", items[0])
 
+    def test_list_jobs_supports_offset_pagination(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                first_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"first-audio", "audio/webm")},
+                )
+                self.assertEqual(first_response.status_code, 202)
+                first_job_id = first_response.json()["job_id"]
+                self._job_ids.append(first_job_id)
+
+                second_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"second-audio", "audio/webm")},
+                )
+                self.assertEqual(second_response.status_code, 202)
+                second_job_id = second_response.json()["job_id"]
+                self._job_ids.append(second_job_id)
+
+                third_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"third-audio", "audio/webm")},
+                )
+                self.assertEqual(third_response.status_code, 202)
+                third_job_id = third_response.json()["job_id"]
+                self._job_ids.append(third_job_id)
+
+                first_page_response = client.get("/api/transcribe/jobs?limit=2&offset=0")
+                self.assertEqual(first_page_response.status_code, 200)
+                first_page = first_page_response.json()
+                self.assertEqual(first_page["count"], 2)
+                self.assertEqual(first_page["limit"], 2)
+                self.assertEqual(first_page["offset"], 0)
+                self.assertEqual(first_page["total_count"], 3)
+
+                first_page_ids = [item["job_id"] for item in first_page["items"]]
+                self.assertEqual(first_page_ids, [third_job_id, second_job_id])
+
+                second_page_response = client.get("/api/transcribe/jobs?limit=2&offset=2")
+                self.assertEqual(second_page_response.status_code, 200)
+                second_page = second_page_response.json()
+                self.assertEqual(second_page["count"], 1)
+                self.assertEqual(second_page["limit"], 2)
+                self.assertEqual(second_page["offset"], 2)
+                self.assertEqual(second_page["total_count"], 3)
+                self.assertEqual(second_page["items"][0]["job_id"], first_job_id)
+
+    def test_list_jobs_supports_status_filter(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                failed_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"failed-audio", "audio/webm")},
+                )
+                self.assertEqual(failed_response.status_code, 202)
+                failed_job_id = failed_response.json()["job_id"]
+                self._job_ids.append(failed_job_id)
+
+                done_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"done-audio", "audio/webm")},
+                )
+                self.assertEqual(done_response.status_code, 202)
+                done_job_id = done_response.json()["job_id"]
+                self._job_ids.append(done_job_id)
+
+                queued_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"queued-audio", "audio/webm")},
+                )
+                self.assertEqual(queued_response.status_code, 202)
+                queued_job_id = queued_response.json()["job_id"]
+                self._job_ids.append(queued_job_id)
+
+                processing_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"processing-audio", "audio/webm")},
+                )
+                self.assertEqual(processing_response.status_code, 202)
+                processing_job_id = processing_response.json()["job_id"]
+                self._job_ids.append(processing_job_id)
+
+                with SessionLocal() as db:
+                    failed_job = (
+                        db.query(TranscriptionJob)
+                        .filter(TranscriptionJob.id == UUID(failed_job_id))
+                        .first()
+                    )
+                    done_job = (
+                        db.query(TranscriptionJob)
+                        .filter(TranscriptionJob.id == UUID(done_job_id))
+                        .first()
+                    )
+                    processing_job = (
+                        db.query(TranscriptionJob)
+                        .filter(TranscriptionJob.id == UUID(processing_job_id))
+                        .first()
+                    )
+                    self.assertIsNotNone(failed_job)
+                    self.assertIsNotNone(done_job)
+                    self.assertIsNotNone(processing_job)
+                    failed_job.status = "failed"
+                    failed_job.processing_error = "forced failure"
+                    done_job.status = "done"
+                    done_job.transcript_text = "ready text"
+                    done_job.transcript_path = "/tmp/done-transcript.txt"
+                    processing_job.status = "processing"
+                    db.commit()
+
+                failed_list_response = client.get("/api/transcribe/jobs?status=failed")
+                self.assertEqual(failed_list_response.status_code, 200)
+                failed_items = failed_list_response.json()["items"]
+                self.assertEqual(len(failed_items), 1)
+                self.assertEqual(failed_items[0]["job_id"], failed_job_id)
+                self.assertEqual(failed_items[0]["status"], "failed")
+
+                done_list_response = client.get("/api/transcribe/jobs?status=done")
+                self.assertEqual(done_list_response.status_code, 200)
+                done_items = done_list_response.json()["items"]
+                self.assertEqual(len(done_items), 1)
+                self.assertEqual(done_items[0]["job_id"], done_job_id)
+                self.assertEqual(done_items[0]["status"], "done")
+                self.assertNotIn("transcript_text", done_items[0])
+
+                queued_list_response = client.get("/api/transcribe/jobs?status=queued")
+                self.assertEqual(queued_list_response.status_code, 200)
+                queued_items = queued_list_response.json()["items"]
+                self.assertEqual(len(queued_items), 1)
+                self.assertEqual(queued_items[0]["job_id"], queued_job_id)
+                self.assertEqual(queued_items[0]["status"], "queued")
+
+                active_list_response = client.get("/api/transcribe/jobs?status=active")
+                self.assertEqual(active_list_response.status_code, 200)
+                active_items = active_list_response.json()["items"]
+                self.assertEqual(len(active_items), 2)
+                active_by_id = {item["job_id"]: item for item in active_items}
+                self.assertIn(queued_job_id, active_by_id)
+                self.assertIn(processing_job_id, active_by_id)
+                self.assertEqual(active_by_id[queued_job_id]["status"], "queued")
+                self.assertEqual(active_by_id[processing_job_id]["status"], "processing")
+
+    def test_list_jobs_returns_400_for_invalid_status_filter(self) -> None:
+        with TestClient(app) as client:
+            response = client.get("/api/transcribe/jobs?status=bad_status")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Invalid status", response.json().get("detail", ""))
+
+    def test_list_jobs_supports_job_id_filter(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                first_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"first-audio", "audio/webm")},
+                )
+                self.assertEqual(first_response.status_code, 202)
+                first_job_id = first_response.json()["job_id"]
+                self._job_ids.append(first_job_id)
+
+                second_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"second-audio", "audio/webm")},
+                )
+                self.assertEqual(second_response.status_code, 202)
+                second_job_id = second_response.json()["job_id"]
+                self._job_ids.append(second_job_id)
+
+                filtered_response = client.get(
+                    f"/api/transcribe/jobs?job_id={first_job_id}"
+                )
+                self.assertEqual(filtered_response.status_code, 200)
+                items = filtered_response.json()["items"]
+                self.assertEqual(len(items), 1)
+                self.assertEqual(items[0]["job_id"], first_job_id)
+                self.assertNotEqual(items[0]["job_id"], second_job_id)
+
+    def test_list_jobs_returns_400_for_invalid_job_id_filter(self) -> None:
+        with TestClient(app) as client:
+            response = client.get("/api/transcribe/jobs?job_id=not-a-uuid")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("job_id must be UUID", response.json().get("detail", ""))
+
     def test_download_transcript_returns_409_when_not_ready(self) -> None:
         from unittest.mock import patch
 

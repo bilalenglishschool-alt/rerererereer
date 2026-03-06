@@ -415,6 +415,56 @@ class TranscriptionFlowTest(unittest.TestCase):
                 self.assertLess(by_id[second_job_id], by_id[first_job_id])
                 self.assertNotIn("transcript_text", items[0])
 
+    def test_list_jobs_supports_offset_pagination(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                first_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"first-audio", "audio/webm")},
+                )
+                self.assertEqual(first_response.status_code, 202)
+                first_job_id = first_response.json()["job_id"]
+                self._job_ids.append(first_job_id)
+
+                second_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"second-audio", "audio/webm")},
+                )
+                self.assertEqual(second_response.status_code, 202)
+                second_job_id = second_response.json()["job_id"]
+                self._job_ids.append(second_job_id)
+
+                third_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"third-audio", "audio/webm")},
+                )
+                self.assertEqual(third_response.status_code, 202)
+                third_job_id = third_response.json()["job_id"]
+                self._job_ids.append(third_job_id)
+
+                first_page_response = client.get("/api/transcribe/jobs?limit=2&offset=0")
+                self.assertEqual(first_page_response.status_code, 200)
+                first_page = first_page_response.json()
+                self.assertEqual(first_page["count"], 2)
+                self.assertEqual(first_page["limit"], 2)
+                self.assertEqual(first_page["offset"], 0)
+                self.assertEqual(first_page["total_count"], 3)
+
+                first_page_ids = [item["job_id"] for item in first_page["items"]]
+                self.assertEqual(first_page_ids, [third_job_id, second_job_id])
+
+                second_page_response = client.get("/api/transcribe/jobs?limit=2&offset=2")
+                self.assertEqual(second_page_response.status_code, 200)
+                second_page = second_page_response.json()
+                self.assertEqual(second_page["count"], 1)
+                self.assertEqual(second_page["limit"], 2)
+                self.assertEqual(second_page["offset"], 2)
+                self.assertEqual(second_page["total_count"], 3)
+                self.assertEqual(second_page["items"][0]["job_id"], first_job_id)
+
     def test_list_jobs_supports_status_filter(self) -> None:
         from unittest.mock import patch
 

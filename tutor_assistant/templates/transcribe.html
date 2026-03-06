@@ -168,6 +168,18 @@
       flex: 1;
       min-width: 220px;
     }
+
+    .history-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 0 10px;
+      flex-wrap: wrap;
+    }
+
+    .history-controls .meta {
+      margin: 0;
+    }
   </style>
 </head>
 <body>
@@ -213,6 +225,11 @@
 
     <section class="history">
       <h2>Последние задачи</h2>
+      <div class="history-controls">
+        <button id="prevPageBtn" class="secondary" disabled>Назад</button>
+        <button id="nextPageBtn" class="secondary" disabled>Вперёд</button>
+        <p id="pageInfo" class="meta">Страница: -</p>
+      </div>
       <ul id="jobsList" class="jobs">
         <li><p class="meta">Список пуст.</p></li>
       </ul>
@@ -234,12 +251,16 @@
     const presetDoneBtn = document.getElementById("presetDoneBtn");
     const refreshBtn = document.getElementById("refreshBtn");
     const clearFiltersBtn = document.getElementById("clearFiltersBtn");
+    const prevPageBtn = document.getElementById("prevPageBtn");
+    const nextPageBtn = document.getElementById("nextPageBtn");
+    const pageInfoEl = document.getElementById("pageInfo");
     const statusEl = document.getElementById("status");
     const metaEl = document.getElementById("meta");
     const resultEl = document.getElementById("result");
     const jobsListEl = document.getElementById("jobsList");
 
     const HISTORY_FILTERS_STORAGE_KEY = "transcribe_history_filters_v1";
+    const HISTORY_PAGE_SIZE = 20;
     const VALID_STATUS_FILTERS = new Set([
       "active",
       "queued",
@@ -251,6 +272,8 @@
 
     let activeJobId = "";
     let pollingTimer = null;
+    let currentJobsOffset = 0;
+    let lastJobsTotalCount = 0;
 
     function setStatus(text, cls = "") {
       statusEl.textContent = text;
@@ -323,6 +346,25 @@
       persistHistoryFilters();
     }
 
+    function updatePagination(totalCount) {
+      lastJobsTotalCount = Math.max(0, Number(totalCount || 0));
+      const totalPages = lastJobsTotalCount > 0
+        ? Math.ceil(lastJobsTotalCount / HISTORY_PAGE_SIZE)
+        : 0;
+      const currentPage = totalPages > 0
+        ? Math.floor(currentJobsOffset / HISTORY_PAGE_SIZE) + 1
+        : 0;
+
+      if (totalPages === 0) {
+        pageInfoEl.textContent = "Страница: 0 / 0";
+      } else {
+        pageInfoEl.textContent = `Страница: ${currentPage} / ${totalPages} (всего: ${lastJobsTotalCount})`;
+      }
+
+      prevPageBtn.disabled = currentJobsOffset <= 0;
+      nextPageBtn.disabled = currentJobsOffset + HISTORY_PAGE_SIZE >= lastJobsTotalCount;
+    }
+
     function stopPolling() {
       if (pollingTimer) {
         window.clearTimeout(pollingTimer);
@@ -338,9 +380,10 @@
       return response.json();
     }
 
-    async function fetchJobs(limit = 20, statusFilter = "", jobIdFilter = "") {
+    async function fetchJobs(limit = 20, offset = 0, statusFilter = "", jobIdFilter = "") {
       const params = new URLSearchParams();
       params.set("limit", String(limit));
+      params.set("offset", String(Math.max(0, Number(offset || 0))));
       const normalizedStatus = String(statusFilter || "").trim().toLowerCase();
       if (normalizedStatus) {
         params.set("status", normalizedStatus);
@@ -400,15 +443,38 @@
       }
     }
 
-    async function refreshJobs() {
+    async function refreshJobs(options = {}) {
+      const resetOffset = Boolean(options.resetOffset);
+      const allowRewind = options.allowRewind !== false;
+      if (resetOffset) {
+        currentJobsOffset = 0;
+      }
+
       try {
         persistHistoryFilters();
         const payload = await fetchJobs(
-          20,
+          HISTORY_PAGE_SIZE,
+          currentJobsOffset,
           statusFilterEl ? statusFilterEl.value : "",
           jobIdFilterEl ? jobIdFilterEl.value : ""
         );
-        renderJobs(payload.items || []);
+        const items = Array.isArray(payload.items) ? payload.items : [];
+        const totalCount = Number(payload.total_count ?? payload.count ?? 0);
+
+        if (allowRewind && currentJobsOffset > 0 && items.length === 0 && totalCount > 0) {
+          const lastPageOffset = Math.max(
+            0,
+            Math.floor((totalCount - 1) / HISTORY_PAGE_SIZE) * HISTORY_PAGE_SIZE
+          );
+          if (lastPageOffset !== currentJobsOffset) {
+            currentJobsOffset = lastPageOffset;
+            await refreshJobs({ allowRewind: false });
+            return;
+          }
+        }
+
+        renderJobs(items);
+        updatePagination(totalCount);
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
         setStatus(`Не удалось загрузить список: ${text}`, "error");
@@ -541,7 +607,7 @@
         const payload = await response.json();
         applyJobPayload(payload, "create");
         setStatus("Задача поставлена в очередь. Ожидаем результат...", "warn");
-        await refreshJobs();
+        await refreshJobs({ resetOffset: true });
         schedulePoll();
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
@@ -582,7 +648,7 @@
         const payload = await response.json();
         applyJobPayload(payload, "retry");
         setStatus("Повторный запуск принят. Ожидаем...", "warn");
-        await refreshJobs();
+        await refreshJobs({ resetOffset: true });
         schedulePoll();
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
@@ -625,7 +691,7 @@
 
         const payload = await response.json();
         applyJobPayload(payload, "cancel");
-        await refreshJobs();
+        await refreshJobs({ resetOffset: true });
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
         setStatus(`Не удалось отменить задачу: ${text}`, "error");
@@ -672,7 +738,7 @@
         stopPolling();
         uploadBtn.disabled = false;
         syncResultActions();
-        await refreshJobs();
+        await refreshJobs({ resetOffset: true });
         setStatus("Задача удалена.", "ok");
       } catch (error) {
         const text = error instanceof Error ? error.message : String(error);
@@ -756,28 +822,42 @@
       void refreshJobs();
     });
     statusFilterEl.addEventListener("change", () => {
-      void refreshJobs();
+      void refreshJobs({ resetOffset: true });
     });
     jobIdFilterEl.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        void refreshJobs();
+        void refreshJobs({ resetOffset: true });
       }
     });
     clearFiltersBtn.addEventListener("click", () => {
       clearHistoryFilters();
-      void refreshJobs();
+      void refreshJobs({ resetOffset: true });
     });
     presetActiveBtn.addEventListener("click", () => {
       applyQuickPreset("active");
-      void refreshJobs();
+      void refreshJobs({ resetOffset: true });
     });
     presetFailedBtn.addEventListener("click", () => {
       applyQuickPreset("failed");
-      void refreshJobs();
+      void refreshJobs({ resetOffset: true });
     });
     presetDoneBtn.addEventListener("click", () => {
       applyQuickPreset("done");
+      void refreshJobs({ resetOffset: true });
+    });
+    prevPageBtn.addEventListener("click", () => {
+      if (currentJobsOffset <= 0) {
+        return;
+      }
+      currentJobsOffset = Math.max(0, currentJobsOffset - HISTORY_PAGE_SIZE);
+      void refreshJobs();
+    });
+    nextPageBtn.addEventListener("click", () => {
+      if (currentJobsOffset + HISTORY_PAGE_SIZE >= lastJobsTotalCount) {
+        return;
+      }
+      currentJobsOffset += HISTORY_PAGE_SIZE;
       void refreshJobs();
     });
 

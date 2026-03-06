@@ -1340,6 +1340,7 @@ async def create_transcription_job(
 @app.get("/api/transcribe/jobs")
 def list_transcription_jobs(
     limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     status: str | None = Query(None),
     job_id: str | None = Query(None),
     db: Session = Depends(get_db),
@@ -1355,10 +1356,14 @@ def list_transcription_jobs(
     elif validated_status:
         query = query.filter(TranscriptionJob.status == validated_status)
 
-    jobs = query.order_by(TranscriptionJob.created_at.desc()).limit(limit).all()
+    total_count = int(query.count())
+    jobs = query.order_by(TranscriptionJob.created_at.desc()).offset(offset).limit(limit).all()
     return {
         "items": [serialize_transcription_job(job, include_text=False) for job in jobs],
         "count": len(jobs),
+        "total_count": total_count,
+        "limit": int(limit),
+        "offset": int(offset),
     }
 
 

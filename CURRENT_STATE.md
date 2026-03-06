@@ -105,7 +105,7 @@ docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
 - API endpoints:
   - `GET /transcribe`
   - `POST /api/transcribe/jobs`
-  - `GET /api/transcribe/jobs` (history, optional filters: `status=active|queued|processing|done|failed|canceled`, `job_id=<uuid>`)
+  - `GET /api/transcribe/jobs` (history with pagination `limit`/`offset`, optional filters: `status=active|queued|processing|done|failed|canceled`, `job_id=<uuid>`)
   - `GET /api/transcribe/jobs/{job_id}`
   - `POST /api/transcribe/jobs/{job_id}/cancel`
   - `DELETE /api/transcribe/jobs/{job_id}`
@@ -115,7 +115,7 @@ docker compose exec postgres psql -U tutor_assistant -d tutor_assistant -c "\dt"
 - На upload endpoint включен rate limit: `6` загрузок в минуту на IP.
 - `retry` для `queued|done` idempotent: повторно task в очередь не добавляется.
 - Если `cancel` пришел во время `processing`, финализация не перезаписывает `canceled` в `done`.
-- UI `/transcribe` сохраняет выбранные history filters (`status`, `job_id`) локально в браузере и имеет quick presets (`Активные`, `Ошибки`, `Завершённые`).
+- UI `/transcribe` сохраняет выбранные history filters (`status`, `job_id`) локально в браузере, имеет quick presets (`Активные`, `Ошибки`, `Завершённые`) и paging controls (`Назад`/`Вперёд`).
 - Удаление transcription job разрешено только для `done|failed|canceled` (для `queued|processing` -> `409`).
 - Worker выполняет periodic retention cleanup старых `done/failed/canceled` transcription jobs.
 

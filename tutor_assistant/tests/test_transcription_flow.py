@@ -445,6 +445,14 @@ class TranscriptionFlowTest(unittest.TestCase):
                 queued_job_id = queued_response.json()["job_id"]
                 self._job_ids.append(queued_job_id)
 
+                processing_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"processing-audio", "audio/webm")},
+                )
+                self.assertEqual(processing_response.status_code, 202)
+                processing_job_id = processing_response.json()["job_id"]
+                self._job_ids.append(processing_job_id)
+
                 with SessionLocal() as db:
                     failed_job = (
                         db.query(TranscriptionJob)
@@ -456,13 +464,20 @@ class TranscriptionFlowTest(unittest.TestCase):
                         .filter(TranscriptionJob.id == UUID(done_job_id))
                         .first()
                     )
+                    processing_job = (
+                        db.query(TranscriptionJob)
+                        .filter(TranscriptionJob.id == UUID(processing_job_id))
+                        .first()
+                    )
                     self.assertIsNotNone(failed_job)
                     self.assertIsNotNone(done_job)
+                    self.assertIsNotNone(processing_job)
                     failed_job.status = "failed"
                     failed_job.processing_error = "forced failure"
                     done_job.status = "done"
                     done_job.transcript_text = "ready text"
                     done_job.transcript_path = "/tmp/done-transcript.txt"
+                    processing_job.status = "processing"
                     db.commit()
 
                 failed_list_response = client.get("/api/transcribe/jobs?status=failed")
@@ -486,6 +501,16 @@ class TranscriptionFlowTest(unittest.TestCase):
                 self.assertEqual(len(queued_items), 1)
                 self.assertEqual(queued_items[0]["job_id"], queued_job_id)
                 self.assertEqual(queued_items[0]["status"], "queued")
+
+                active_list_response = client.get("/api/transcribe/jobs?status=active")
+                self.assertEqual(active_list_response.status_code, 200)
+                active_items = active_list_response.json()["items"]
+                self.assertEqual(len(active_items), 2)
+                active_by_id = {item["job_id"]: item for item in active_items}
+                self.assertIn(queued_job_id, active_by_id)
+                self.assertIn(processing_job_id, active_by_id)
+                self.assertEqual(active_by_id[queued_job_id]["status"], "queued")
+                self.assertEqual(active_by_id[processing_job_id]["status"], "processing")
 
     def test_list_jobs_returns_400_for_invalid_status_filter(self) -> None:
         with TestClient(app) as client:

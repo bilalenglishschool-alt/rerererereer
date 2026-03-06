@@ -191,6 +191,7 @@
       <label for="statusFilter">Фильтр:</label>
       <select id="statusFilter">
         <option value="">Все статусы</option>
+        <option value="active">active (queued+processing)</option>
         <option value="queued">queued</option>
         <option value="processing">processing</option>
         <option value="done">done</option>
@@ -199,6 +200,9 @@
       </select>
       <label for="jobIdFilter">Job ID:</label>
       <input id="jobIdFilter" type="text" placeholder="UUID (optional)" />
+      <button id="presetActiveBtn" class="secondary">Активные</button>
+      <button id="presetFailedBtn" class="secondary">Ошибки</button>
+      <button id="presetDoneBtn" class="secondary">Завершённые</button>
       <button id="refreshBtn" class="secondary">Обновить список</button>
       <button id="clearFiltersBtn" class="secondary">Сбросить фильтры</button>
     </div>
@@ -225,6 +229,9 @@
     const downloadBtn = document.getElementById("downloadBtn");
     const statusFilterEl = document.getElementById("statusFilter");
     const jobIdFilterEl = document.getElementById("jobIdFilter");
+    const presetActiveBtn = document.getElementById("presetActiveBtn");
+    const presetFailedBtn = document.getElementById("presetFailedBtn");
+    const presetDoneBtn = document.getElementById("presetDoneBtn");
     const refreshBtn = document.getElementById("refreshBtn");
     const clearFiltersBtn = document.getElementById("clearFiltersBtn");
     const statusEl = document.getElementById("status");
@@ -233,7 +240,14 @@
     const jobsListEl = document.getElementById("jobsList");
 
     const HISTORY_FILTERS_STORAGE_KEY = "transcribe_history_filters_v1";
-    const VALID_STATUS_FILTERS = new Set(["queued", "processing", "done", "failed", "canceled"]);
+    const VALID_STATUS_FILTERS = new Set([
+      "active",
+      "queued",
+      "processing",
+      "done",
+      "failed",
+      "canceled",
+    ]);
 
     let activeJobId = "";
     let pollingTimer = null;
@@ -299,6 +313,12 @@
 
     function clearHistoryFilters() {
       statusFilterEl.value = "";
+      jobIdFilterEl.value = "";
+      persistHistoryFilters();
+    }
+
+    function applyQuickPreset(statusValue) {
+      statusFilterEl.value = statusValue;
       jobIdFilterEl.value = "";
       persistHistoryFilters();
     }
@@ -746,6 +766,18 @@
     });
     clearFiltersBtn.addEventListener("click", () => {
       clearHistoryFilters();
+      void refreshJobs();
+    });
+    presetActiveBtn.addEventListener("click", () => {
+      applyQuickPreset("active");
+      void refreshJobs();
+    });
+    presetFailedBtn.addEventListener("click", () => {
+      applyQuickPreset("failed");
+      void refreshJobs();
+    });
+    presetDoneBtn.addEventListener("click", () => {
+      applyQuickPreset("done");
       void refreshJobs();
     });
 

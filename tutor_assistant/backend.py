@@ -86,6 +86,7 @@ TRANSCRIPTION_KNOWN_STATUSES = (
     "failed",
     "canceled",
 )
+TRANSCRIPTION_KNOWN_STATUS_FILTERS = TRANSCRIPTION_KNOWN_STATUSES + ("active",)
 
 WORKER_PROMETHEUS_METRICS: tuple[tuple[str, str, str, str], ...] = (
     (
@@ -1106,8 +1107,8 @@ def validate_transcription_status_filter(status: str | None) -> str | None:
     if not normalized:
         return None
 
-    if normalized not in TRANSCRIPTION_KNOWN_STATUSES:
-        allowed_values = ", ".join(TRANSCRIPTION_KNOWN_STATUSES)
+    if normalized not in TRANSCRIPTION_KNOWN_STATUS_FILTERS:
+        allowed_values = ", ".join(TRANSCRIPTION_KNOWN_STATUS_FILTERS)
         raise HTTPException(
             status_code=400,
             detail=f"Invalid status. Allowed values: {allowed_values}",
@@ -1349,7 +1350,9 @@ def list_transcription_jobs(
     query = db.query(TranscriptionJob)
     if validated_job_uuid:
         query = query.filter(TranscriptionJob.id == validated_job_uuid)
-    if validated_status:
+    if validated_status == "active":
+        query = query.filter(TranscriptionJob.status.in_(("queued", "processing")))
+    elif validated_status:
         query = query.filter(TranscriptionJob.status == validated_status)
 
     jobs = query.order_by(TranscriptionJob.created_at.desc()).limit(limit).all()

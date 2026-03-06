@@ -54,6 +54,20 @@ docker compose up -d --build
 docker compose exec backend alembic -c /app/alembic.ini upgrade head
 ```
 
+## VPS деплой (prod)
+
+Полный runbook:
+- `VPS_DEPLOY_RUNBOOK.md`
+
+Деплой-скрипт:
+- `scripts/deploy_prod.sh`
+
+Быстрый сценарий:
+
+```bash
+./scripts/deploy_prod.sh --step all --mode safe --ref <tag_or_sha>
+```
+
 ## Проверка
 
 ```bash
@@ -143,6 +157,7 @@ curl http://localhost:${HOST_PORT:-8000}/health
 - Runtime snapshot: `CURRENT_STATE.md`
 - Prod reset rollout: `DEPLOY_RESET_DB.md`
 - Prod go-live checklist: `PROD_GO_LIVE_CHECKLIST.md`
+- VPS deploy runbook: `VPS_DEPLOY_RUNBOOK.md`
 - Архитектура: `ARCHITECTURE_OVERVIEW.md`
 - Контекст проекта: `PROJECT_CONTEXT.md`
 

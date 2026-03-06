@@ -169,6 +169,8 @@ curl http://localhost:${HOST_PORT:-8000}/health
 
 Production reset runbook:
 - `DEPLOY_RESET_DB.md`
+- `VPS_DEPLOY_RUNBOOK.md`
+- `scripts/deploy_prod.sh` (steps: `preflight|backup|deploy|verify|all|rollback-help`)
 
 ## 11) Known limitations / next priorities
 - При необходимости data retention: подготовить non-reset migration plan.

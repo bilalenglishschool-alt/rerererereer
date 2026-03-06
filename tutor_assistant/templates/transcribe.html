@@ -200,6 +200,7 @@
       <label for="jobIdFilter">Job ID:</label>
       <input id="jobIdFilter" type="text" placeholder="UUID (optional)" />
       <button id="refreshBtn" class="secondary">Обновить список</button>
+      <button id="clearFiltersBtn" class="secondary">Сбросить фильтры</button>
     </div>
 
     <div id="status" class="status">Ожидание файла.</div>
@@ -225,10 +226,14 @@
     const statusFilterEl = document.getElementById("statusFilter");
     const jobIdFilterEl = document.getElementById("jobIdFilter");
     const refreshBtn = document.getElementById("refreshBtn");
+    const clearFiltersBtn = document.getElementById("clearFiltersBtn");
     const statusEl = document.getElementById("status");
     const metaEl = document.getElementById("meta");
     const resultEl = document.getElementById("result");
     const jobsListEl = document.getElementById("jobsList");
+
+    const HISTORY_FILTERS_STORAGE_KEY = "transcribe_history_filters_v1";
+    const VALID_STATUS_FILTERS = new Set(["queued", "processing", "done", "failed", "canceled"]);
 
     let activeJobId = "";
     let pollingTimer = null;
@@ -257,6 +262,45 @@
       const hasText = Boolean(resultEl.value && resultEl.value.trim());
       copyBtn.disabled = !hasText;
       downloadBtn.disabled = !(activeJobId && hasText);
+    }
+
+    function persistHistoryFilters() {
+      const payload = {
+        status: String(statusFilterEl?.value || "").trim().toLowerCase(),
+        job_id: String(jobIdFilterEl?.value || "").trim(),
+      };
+      try {
+        if (!payload.status && !payload.job_id) {
+          window.localStorage.removeItem(HISTORY_FILTERS_STORAGE_KEY);
+          return;
+        }
+        window.localStorage.setItem(HISTORY_FILTERS_STORAGE_KEY, JSON.stringify(payload));
+      } catch (_error) {
+        // no-op
+      }
+    }
+
+    function restoreHistoryFilters() {
+      try {
+        const raw = window.localStorage.getItem(HISTORY_FILTERS_STORAGE_KEY);
+        if (!raw) {
+          return;
+        }
+        const parsed = JSON.parse(raw);
+        const statusValue = String(parsed?.status || "").trim().toLowerCase();
+        const jobIdValue = String(parsed?.job_id || "").trim();
+        statusFilterEl.value = VALID_STATUS_FILTERS.has(statusValue) ? statusValue : "";
+        jobIdFilterEl.value = jobIdValue;
+      } catch (_error) {
+        statusFilterEl.value = "";
+        jobIdFilterEl.value = "";
+      }
+    }
+
+    function clearHistoryFilters() {
+      statusFilterEl.value = "";
+      jobIdFilterEl.value = "";
+      persistHistoryFilters();
     }
 
     function stopPolling() {
@@ -338,6 +382,7 @@
 
     async function refreshJobs() {
       try {
+        persistHistoryFilters();
         const payload = await fetchJobs(
           20,
           statusFilterEl ? statusFilterEl.value : "",
@@ -699,7 +744,12 @@
         void refreshJobs();
       }
     });
+    clearFiltersBtn.addEventListener("click", () => {
+      clearHistoryFilters();
+      void refreshJobs();
+    });
 
+    restoreHistoryFilters();
     syncResultActions();
     void refreshJobs();
   </script>

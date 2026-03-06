@@ -494,6 +494,44 @@ class TranscriptionFlowTest(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Invalid status", response.json().get("detail", ""))
 
+    def test_list_jobs_supports_job_id_filter(self) -> None:
+        from unittest.mock import patch
+
+        redis_stub = _DummyRedis()
+        with patch("tutor_assistant.backend.get_redis_client", return_value=redis_stub):
+            with TestClient(app) as client:
+                first_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"first-audio", "audio/webm")},
+                )
+                self.assertEqual(first_response.status_code, 202)
+                first_job_id = first_response.json()["job_id"]
+                self._job_ids.append(first_job_id)
+
+                second_response = client.post(
+                    "/api/transcribe/jobs",
+                    files={"audio": ("sample.webm", b"second-audio", "audio/webm")},
+                )
+                self.assertEqual(second_response.status_code, 202)
+                second_job_id = second_response.json()["job_id"]
+                self._job_ids.append(second_job_id)
+
+                filtered_response = client.get(
+                    f"/api/transcribe/jobs?job_id={first_job_id}"
+                )
+                self.assertEqual(filtered_response.status_code, 200)
+                items = filtered_response.json()["items"]
+                self.assertEqual(len(items), 1)
+                self.assertEqual(items[0]["job_id"], first_job_id)
+                self.assertNotEqual(items[0]["job_id"], second_job_id)
+
+    def test_list_jobs_returns_400_for_invalid_job_id_filter(self) -> None:
+        with TestClient(app) as client:
+            response = client.get("/api/transcribe/jobs?job_id=not-a-uuid")
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("job_id must be UUID", response.json().get("detail", ""))
+
     def test_download_transcript_returns_409_when_not_ready(self) -> None:
         from unittest.mock import patch
 

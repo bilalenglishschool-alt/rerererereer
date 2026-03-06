@@ -1340,10 +1340,15 @@ async def create_transcription_job(
 def list_transcription_jobs(
     limit: int = Query(20, ge=1, le=100),
     status: str | None = Query(None),
+    job_id: str | None = Query(None),
     db: Session = Depends(get_db),
 ) -> dict:
     validated_status = validate_transcription_status_filter(status)
+    normalized_job_id = str(job_id or "").strip()
+    validated_job_uuid = parse_job_id(normalized_job_id) if normalized_job_id else None
     query = db.query(TranscriptionJob)
+    if validated_job_uuid:
+        query = query.filter(TranscriptionJob.id == validated_job_uuid)
     if validated_status:
         query = query.filter(TranscriptionJob.status == validated_status)
 
